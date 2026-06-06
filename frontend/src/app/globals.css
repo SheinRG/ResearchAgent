@@ -8,27 +8,27 @@
 
 /* --- CSS Custom Properties (Design Tokens) --- */
 :root {
-    /* Indigo Night — Dark palette */
-    --bg-primary: #0a0a0f;
-    --bg-secondary: #12121a;
-    --bg-tertiary: #1a1a2e;
-    --bg-hover: #222236;
-    --bg-card: rgba(18, 18, 26, 0.8);
-    --bg-glass: rgba(26, 26, 46, 0.6);
+    /* Emerald/Teal — Dark palette */
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-tertiary: #334155;
+    --bg-hover: #475569;
+    --bg-card: rgba(30, 41, 59, 0.8);
+    --bg-glass: rgba(15, 23, 42, 0.6);
 
-    --text-primary: #e4e4e7;
-    --text-secondary: #a1a1aa;
-    --text-tertiary: #71717a;
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
+    --text-tertiary: #94a3b8;
 
-    --accent: #818cf8;
-    --accent-hover: #6366f1;
-    --accent-dark: #4f46e5;
-    --accent-glow: rgba(129, 140, 248, 0.15);
-    --accent-glow-strong: rgba(129, 140, 248, 0.3);
+    --accent: #10b981;
+    --accent-hover: #059669;
+    --accent-dark: #047857;
+    --accent-glow: rgba(16, 185, 129, 0.15);
+    --accent-glow-strong: rgba(16, 185, 129, 0.3);
 
     --border-subtle: rgba(255, 255, 255, 0.06);
     --border-default: rgba(255, 255, 255, 0.1);
-    --border-accent: rgba(129, 140, 248, 0.3);
+    --border-accent: rgba(16, 185, 129, 0.3);
 
     --success: #34d399;
     --success-bg: rgba(52, 211, 153, 0.1);
@@ -41,8 +41,8 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
-    --shadow-glow: 0 0 20px rgba(129, 140, 248, 0.15);
-    --shadow-glow-strong: 0 0 40px rgba(129, 140, 248, 0.25);
+    --shadow-glow: 0 0 20px rgba(16, 185, 129, 0.15);
+    --shadow-glow-strong: 0 0 40px rgba(16, 185, 129, 0.25);
 
     /* Radii */
     --radius-sm: 8px;
@@ -81,31 +81,31 @@
 
 /* --- Light Mode Override --- */
 [data-theme="light"] {
-    --bg-primary: #fafafa;
+    --bg-primary: #f8fafc;
     --bg-secondary: #ffffff;
-    --bg-tertiary: #f4f4f5;
-    --bg-hover: #e4e4e7;
+    --bg-tertiary: #f1f5f9;
+    --bg-hover: #e2e8f0;
     --bg-card: rgba(255, 255, 255, 0.9);
-    --bg-glass: rgba(244, 244, 245, 0.7);
+    --bg-glass: rgba(248, 250, 252, 0.7);
 
-    --text-primary: #18181b;
-    --text-secondary: #52525b;
-    --text-tertiary: #a1a1aa;
+    --text-primary: #0f172a;
+    --text-secondary: #334155;
+    --text-tertiary: #64748b;
 
-    --accent: #6366f1;
-    --accent-hover: #4f46e5;
-    --accent-glow: rgba(99, 102, 241, 0.12);
-    --accent-glow-strong: rgba(99, 102, 241, 0.2);
+    --accent: #10b981;
+    --accent-hover: #059669;
+    --accent-glow: rgba(16, 185, 129, 0.12);
+    --accent-glow-strong: rgba(16, 185, 129, 0.2);
 
     --border-subtle: rgba(0, 0, 0, 0.06);
     --border-default: rgba(0, 0, 0, 0.1);
-    --border-accent: rgba(99, 102, 241, 0.3);
+    --border-accent: rgba(16, 185, 129, 0.3);
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
     --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
-    --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.1);
-    --shadow-glow-strong: 0 0 40px rgba(99, 102, 241, 0.15);
+    --shadow-glow: 0 0 20px rgba(16, 185, 129, 0.1);
+    --shadow-glow-strong: 0 0 40px rgba(16, 185, 129, 0.15);
 }
 
 /* --- Global Reset --- */
@@ -150,9 +150,9 @@ body::before {
     width: 100%;
     height: 100%;
     background:
-        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(129, 140, 248, 0.08), transparent),
-        radial-gradient(ellipse 60% 40% at 80% 50%, rgba(99, 102, 241, 0.04), transparent),
-        radial-gradient(ellipse 60% 40% at 20% 80%, rgba(139, 92, 246, 0.04), transparent);
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(16, 185, 129, 0.08), transparent),
+        radial-gradient(ellipse 60% 40% at 80% 50%, rgba(5, 150, 105, 0.04), transparent),
+        radial-gradient(ellipse 60% 40% at 20% 80%, rgba(52, 211, 153, 0.04), transparent);
     pointer-events: none;
     z-index: 0;
 }
@@ -250,7 +250,7 @@ body::before {
     font-weight: 800;
     line-height: 1.1;
     margin-bottom: var(--space-md);
-    background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent) 50%, #a78bfa 100%);
+    background: linear-gradient(135deg, var(--text-primary) 0%, var(--accent) 50%, #34d399 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -1156,6 +1156,7 @@ body::before {
     .source-card {
         flex: 0 0 160px;
         padding: var(--space-sm);
+    }
 }
 
 /* ============================================================

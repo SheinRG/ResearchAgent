@@ -12,9 +12,7 @@ const EXAMPLE_QUERIES = [
   "Latest breakthroughs in quantum computing",
   "How does mRNA vaccine technology work?",
   "Compare React, Vue, and Svelte in 2025",
-  "What is the current state of nuclear fusion?",
   "Explain transformer architecture in AI",
-  "How close are we to AGI?",
 ];
 
 export default function HomePage() {
@@ -49,7 +47,6 @@ export default function HomePage() {
 
   return (
     <>
-      {/* Navbar */}
       <nav className="navbar">
         <a href="/" className="navbar-brand">
           <span className="navbar-brand-icon">🔬</span>
@@ -62,47 +59,28 @@ export default function HomePage() {
         </div>
       </nav>
 
-      {/* Hero Section */}
       <main className="main-content">
         <div className="hero">
-          {/* Badge */}
-          <motion.div
-            className="hero-badge"
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-          >
-            <span className="hero-badge-dot" />
-            100% Local • Zero API Keys
-          </motion.div>
-
-          {/* Title */}
           <motion.h1
             className="hero-title"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.1 }}
           >
-            Research anything.
-            <br />
-            Get cited answers.
+            What do you want to know?
           </motion.h1>
 
-          {/* Subtitle */}
           <motion.p
             className="hero-subtitle"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.5, delay: 0.3 }}
           >
-            An AI agent that searches the web, reads sources, and synthesizes
-            comprehensive answers with citations — all running locally on your machine.
+            Ask anything. Get deep, cited research instantly.
           </motion.p>
 
-          {/* Search Bar */}
           <SearchBar onSearch={handleSearch} mode="large" />
 
-          {/* Example Chips */}
           <motion.div
             className="example-chips"
             initial={{ opacity: 0 }}
@@ -124,7 +102,6 @@ export default function HomePage() {
             ))}
           </motion.div>
 
-          {/* Recent Searches */}
           {recentSearches.length > 0 && (
             <motion.div
               className="recent-section"
@@ -134,7 +111,7 @@ export default function HomePage() {
             >
               <div className="recent-label">Recent Searches</div>
               <div className="recent-list">
-                {recentSearches.slice(0, 5).map((search, i) => (
+                {recentSearches.slice(0, 3).map((search, i) => (
                   <motion.a
                     key={search.timestamp}
                     className="recent-item"

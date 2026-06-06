@@ -99,6 +99,9 @@ function ResearchContent() {
             {query}
           </motion.h1>
 
+          {/* Sources */}
+          {sources.length > 0 && <SourceCards sources={sources} />}
+
           {/* Phase Indicator */}
           {phase && !isDone && (
             <PhaseIndicator phase={phase} message={phaseMessage} />
@@ -125,9 +128,6 @@ function ResearchContent() {
 
           {/* Skeleton Loading */}
           {showSkeleton && !error && <SkeletonLoader />}
-
-          {/* Sources */}
-          {sources.length > 0 && <SourceCards sources={sources} />}
 
           {/* Streaming Answer */}
           {answer && (

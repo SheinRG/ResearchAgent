@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # --- Auth ---
     auth_secret: str = "change-me-in-production-use-a-random-string"
     google_client_id: str = ""
+    google_client_secret: str = ""
     auth_token_expiry_hours: int = 72  # 3 days
 
     # --- Agent Settings ---
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
+        "extra": "ignore",
     }
 
 

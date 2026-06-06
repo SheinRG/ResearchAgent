@@ -32,7 +32,7 @@ class User(Base):
     password_hash = Column(String, nullable=True)  # Null for Google-only users
     google_id = Column(String, nullable=True, unique=True, index=True)
     picture = Column(String, default="")
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     sessions = relationship("ResearchSession", back_populates="user", cascade="all, delete-orphan")
 
@@ -43,8 +43,8 @@ class ResearchSession(Base):
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     user = relationship("User", back_populates="sessions")
     queries = relationship("ResearchQuery", back_populates="session", cascade="all, delete-orphan")
@@ -65,7 +65,7 @@ class ResearchQuery(Base):
     confidence = Column(Float, default=0.0)
     iterations = Column(Integer, default=1)
     follow_up_suggestions = Column(JSON, default=list)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     session = relationship("ResearchSession", back_populates="queries")
 

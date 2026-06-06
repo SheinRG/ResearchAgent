@@ -1,1 +1,3 @@
-# Services
+"""
+Services package initialization.
+"""
