@@ -16,6 +16,14 @@
     --bg-card: rgba(11, 11, 18, 0.6);
     --bg-glass: rgba(5, 5, 8, 0.6);
 
+    /* Search Bar Specific Variables */
+    --bg-search-input: rgba(11, 11, 18, 0.45);
+    --bg-search-input-hover: rgba(11, 11, 18, 0.55);
+    --bg-search-input-focus: rgba(19, 19, 34, 0.7);
+    --border-search-input: rgba(255, 255, 255, 0.08);
+    --bg-search-submit-disabled: rgba(255, 255, 255, 0.05);
+    --text-search-submit-disabled: rgba(255, 255, 255, 0.25);
+
     --text-primary: #f8fafc;
     --text-secondary: #cbd5e1;
     --text-tertiary: #94a3b8;
@@ -87,6 +95,14 @@
     --bg-hover: #e2e8f0;
     --bg-card: rgba(255, 255, 255, 0.85);
     --bg-glass: rgba(247, 249, 252, 0.75);
+
+    /* Search Bar Specific Variables - Light Override */
+    --bg-search-input: rgba(255, 255, 255, 0.8);
+    --bg-search-input-hover: rgba(255, 255, 255, 0.9);
+    --bg-search-input-focus: #ffffff;
+    --border-search-input: rgba(0, 0, 0, 0.12);
+    --bg-search-submit-disabled: rgba(0, 0, 0, 0.06);
+    --text-search-submit-disabled: rgba(0, 0, 0, 0.25);
 
     --text-primary: #0f172a;
     --text-secondary: #475569;
@@ -298,10 +314,10 @@ body::before {
 
 .search-input {
     width: 100%;
-    background: rgba(11, 11, 18, 0.45);
+    background: var(--bg-search-input);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
-    border: 1px solid var(--border-default);
+    border: 1px solid var(--border-search-input);
     color: var(--text-primary);
     font-family: var(--font-family);
     outline: none;
@@ -314,14 +330,15 @@ body::before {
 }
 
 .search-input:hover {
-    border-color: rgba(129, 140, 248, 0.3);
+    border-color: var(--border-accent);
+    background: var(--bg-search-input-hover);
     box-shadow: 0 0 12px rgba(129, 140, 248, 0.08);
 }
 
 .search-input:focus {
     border-color: var(--accent);
     box-shadow: var(--shadow-glow-strong), 0 0 0 1px var(--accent);
-    background: rgba(19, 19, 34, 0.7);
+    background: var(--bg-search-input-focus);
 }
 
 .search-input:focus::placeholder {
@@ -360,11 +377,12 @@ body::before {
 }
 
 .search-submit:disabled {
-    opacity: 0.4;
+    opacity: 0.5;
     cursor: not-allowed;
     transform: translateY(-50%);
     box-shadow: none;
-    background: var(--bg-tertiary);
+    background: var(--bg-search-submit-disabled);
+    color: var(--text-search-submit-disabled);
     border-color: transparent;
 }
 
