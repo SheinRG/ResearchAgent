@@ -5,7 +5,9 @@ Planner → Researcher → Reranker → Synthesizer → Reflector → (loop or e
 """
 
 import logging
+from typing import Optional
 from langgraph.graph import StateGraph, END
+from langgraph.graph.state import CompiledStateGraph
 
 from app.agents.state import ResearchState
 from app.agents.planner import planner_node
@@ -78,10 +80,10 @@ def build_research_graph() -> StateGraph:
 
 
 # Singleton compiled graph
-_graph = None
+_graph: Optional[CompiledStateGraph] = None
 
 
-def get_research_graph():
+def get_research_graph() -> CompiledStateGraph:
     """Get the singleton compiled research graph."""
     global _graph
     if _graph is None:
