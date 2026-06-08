@@ -82,19 +82,20 @@ def _extract_claim_context(text: str, citation_idx: int) -> str:
         return ""
 
     # Find sentence boundaries around the marker
-    # Look backwards for sentence start
+    # Look backwards for sentence start (up to 300 characters before the marker)
     start = pos
     for i in range(pos - 1, max(pos - 300, -1), -1):
         if i < 0:
             start = 0
             break
+        # Split on standard punctuation or newlines
         if text[i] in '.!?\n' and i < pos - 2:
             start = i + 1
             break
     else:
         start = max(0, pos - 150)
 
-    # Look forwards for sentence end
+    # Look forwards for sentence end (up to 300 characters after the marker)
     end = pos + len(marker)
     for i in range(end, min(end + 300, len(text))):
         if text[i] in '.!?\n':
@@ -104,10 +105,10 @@ def _extract_claim_context(text: str, citation_idx: int) -> str:
         end = min(len(text), pos + 200)
 
     claim = text[start:end].strip()
-    # Remove the citation markers from the claim text
+    # Remove all citation markers from the claim text to keep it clean
     claim = re.sub(r'\[\d+\]', '', claim).strip()
 
-    return claim[:300]  # Limit claim length
+    return claim[:300]  # Limit claim length to 300 characters to keep citations concise
 
 
 def format_sources_for_prompt(sources: list[SearchResult]) -> str:
