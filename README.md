@@ -99,12 +99,17 @@ event: done         → {"session_id": "...", "confidence": 0.89}
 
 ## 🔧 Configuration
 
-Copy `.env.example` to `.env` and adjust:
+Copy `.env.example` to `.env` and adjust the variables:
 
-```env
-# Use a lighter model for 8GB RAM machines
-OLLAMA_MODEL=llama3.2:3b
-```
+| Variable | Description | Default / Example |
+|----------|-------------|-------------------|
+| `GROQ_API_KEY` | API key for Groq Cloud LLM | `your-groq-api-key-here` |
+| `GROQ_MODEL` | Groq LLM model identifier | `llama-3.1-8b-instant` |
+| `SERPER_API_KEY` | API key for Serper search API | `your-serper-api-key-here` |
+| `AUTH_SECRET` | Secret key used for session authentication | `change-me-in-production-use-a-random-string` |
+| `GOOGLE_CLIENT_ID` | Client ID for Google OAuth integration | `your-google-client-id-here` |
+| `OLLAMA_MODEL` | Ollama model override (for local model setups) | `llama3.2:3b` |
+
 
 ## 📁 Project Structure
 
