@@ -128,17 +128,30 @@ async def researcher_node(state: ResearchState) -> dict:
                 scraped_content.append(content_entry)
                 await cache_set("scrape", url, content_entry)
 
-    # --- Step 3: Chunk all scraped content ---
+    # --- Step 3: Chunk all scraped content IN PARALLEL ---
     all_chunks = []
-    for content in scraped_content:
-        chunks = chunk_text(content["text"], settings.chunk_size, settings.chunk_overlap)
-        for chunk_text_str in chunks:
-            all_chunks.append({
+    loop = asyncio.get_running_loop()
+
+    async def _process_content(content):
+        # Run CPU-bound chunking in a thread pool to avoid blocking the event loop
+        chunks = await loop.run_in_executor(
+            None, chunk_text, content["text"], settings.chunk_size, settings.chunk_overlap
+        )
+        return [
+            {
                 "text": chunk_text_str,
                 "source_url": content["url"],
                 "source_title": content.get("title", ""),
                 "source_domain": content.get("domain", ""),
-            })
+            }
+            for chunk_text_str in chunks
+        ]
+
+    if scraped_content:
+        chunk_tasks = [_process_content(c) for c in scraped_content]
+        chunk_results = await asyncio.gather(*chunk_tasks)
+        for res in chunk_results:
+            all_chunks.extend(res)
 
     logger.info("Researcher: generated %d chunks from %d scraped pages",
                 len(all_chunks), len(scraped_content))
