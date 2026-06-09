@@ -90,18 +90,25 @@ def _extract_text(html: str, url: str) -> Optional[str]:
         return None
 
 
-async def scrape_urls(urls: list[str], timeout: int = 15) -> dict[str, Optional[str]]:
+async def scrape_urls(urls: list[str], timeout: int = 15, max_concurrent: int = 5) -> dict[str, Optional[str]]:
     """
-    Scrape multiple URLs in parallel.
+    Scrape multiple URLs in parallel with a concurrency limit.
 
     Args:
         urls: List of URLs to scrape.
         timeout: Per-request timeout in seconds.
+        max_concurrent: Maximum number of concurrent scrape requests.
 
     Returns:
         Dict mapping URL → extracted text (or None on failure).
     """
-    tasks = [scrape_url(url, timeout) for url in urls]
+    sem = asyncio.Semaphore(max_concurrent)
+
+    async def _scrape_with_sem(url: str):
+        async with sem:
+            return await scrape_url(url, timeout)
+
+    tasks = [_scrape_with_sem(url) for url in urls]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     scraped = {}
