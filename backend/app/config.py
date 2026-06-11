@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     # --- Redis ---
     redis_url: str = "redis://redis:6379/0"
-    cache_ttl: int = 3600  # 1 hour
+    cache_ttl: int = 3600  # 1 hour in seconds
 
     # --- PostgreSQL ---
     database_url: str = "postgresql+asyncpg://agent:agent@postgres:5432/research_agent"
