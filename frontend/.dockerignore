@@ -1,0 +1,13 @@
+# Build context hygiene: deps and build output are regenerated in the image,
+# and .env must never be baked into the bundle.
+node_modules
+.next
+out
+.env
+.env.*
+.git
+.gitignore
+npm-debug.log*
+Dockerfile
+.dockerignore
+README.md

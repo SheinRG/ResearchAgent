@@ -1,0 +1,65 @@
+# Render Blueprint — backend API + managed Postgres + managed Redis.
+# The frontend deploys separately on Vercel (see DEPLOYMENT.md).
+#
+# In the Render dashboard: New + → "Blueprint" → pick this repo. Render reads
+# this file, creates the services, and prompts for the secrets marked
+# `sync: false` (GROQ_API_KEY, SERPER_API_KEY, GOOGLE_CLIENT_ID, CORS_ORIGINS).
+
+services:
+  - type: web
+    name: goon-backend
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    # Starter = 512MB. FlashRank + onnxruntime can be tight there, so this
+    # blueprint uses the lightweight reranker by default (RERANKER_MODEL below).
+    # For the higher-quality MiniLM reranker, move to a >=2GB plan (standard).
+    plan: starter
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false                # paste in dashboard
+      - key: SERPER_API_KEY
+        sync: false                # paste in dashboard
+      - key: AUTH_SECRET
+        generateValue: true        # Render generates a strong secret
+      - key: GOOGLE_CLIENT_ID
+        sync: false                # optional; leave blank to disable Google login
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: GROQ_SYNTH_MODEL
+        value: llama-3.3-70b-versatile
+      # Lightweight reranker so the service fits a small instance. Remove this
+      # (or set to ms-marco-MiniLM-L-12-v2) on a >=2GB plan for better ranking.
+      - key: RERANKER_MODEL
+        value: ms-marco-TinyBERT-L-2-v2
+      - key: RATE_LIMIT_PER_HOUR
+        value: "30"
+      # MUST include your Vercel URL(s) as a JSON array, e.g.
+      #   ["https://your-app.vercel.app"]
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: goon-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: goon-redis
+          property: connectionString
+
+  # Redis is optional — the app degrades gracefully (no cache / no rate limit)
+  # if it's absent. Wiring it here just enables both.
+  - type: redis
+    name: goon-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []                # internal-only access
+
+databases:
+  - name: goon-db
+    plan: free
+    databaseName: research_agent
+    user: agent

@@ -76,13 +76,31 @@ _engine = None
 _session_factory = None
 
 
+def _normalize_db_url(url: str) -> str:
+    """
+    Ensure the URL uses the async ``asyncpg`` driver.
+
+    Managed hosts (Render, Railway, Neon, Heroku-style) hand out
+    ``postgres://`` or ``postgresql://`` URLs, but SQLAlchemy's async engine
+    needs the driver named explicitly as ``postgresql+asyncpg://``. Without
+    this, the app crashes on boot with "dialect requires async driver".
+    """
+    if url.startswith("postgresql+"):
+        return url  # already has an explicit driver (e.g. +asyncpg)
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    return url
+
+
 def get_engine():
     """Get or create the async database engine."""
     global _engine
     if _engine is None:
         settings = get_settings()
         _engine = create_async_engine(
-            settings.database_url,
+            _normalize_db_url(settings.database_url),
             echo=False,
             pool_size=5,
             max_overflow=10,
