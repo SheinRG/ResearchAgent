@@ -12,24 +12,32 @@ const PLACEHOLDERS = [
   "Explain the implications of recent AI regulation proposals",
 ];
 
-export default function SearchBar({ onSearch, mode = "large", disabled = false }) {
+export default function SearchBar({
+  onSearch,
+  mode = "large",
+  disabled = false,
+  placeholder = null,
+  clearOnSubmit = false,
+}) {
   const [query, setQuery] = useState("");
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
   const inputRef = useRef(null);
 
-  // Rotate placeholder text
+  // Rotate placeholder text — only when no fixed placeholder is supplied.
   useEffect(() => {
+    if (placeholder) return;
     const interval = setInterval(() => {
       setPlaceholderIdx((prev) => (prev + 1) % PLACEHOLDERS.length);
     }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [placeholder]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
     const trimmed = query.trim();
     if (trimmed && !disabled) {
       onSearch(trimmed);
+      if (clearOnSubmit) setQuery("");
     }
   };
 
@@ -57,7 +65,7 @@ export default function SearchBar({ onSearch, mode = "large", disabled = false }
           id="search-input"
           type="text"
           className="ask-input"
-          placeholder={PLACEHOLDERS[placeholderIdx]}
+          placeholder={placeholder || PLACEHOLDERS[placeholderIdx]}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}

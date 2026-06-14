@@ -1,45 +1,40 @@
 "use client";
 
-import { useEffect, useRef, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { motion } from "motion/react";
 import SearchBar from "@/components/SearchBar";
-import PhaseIndicator from "@/components/PhaseIndicator";
-import SourceCards from "@/components/SourceCards";
-import StreamingAnswer from "@/components/StreamingAnswer";
-import FollowUpChips from "@/components/FollowUpChips";
+import ResearchTurn from "@/components/ResearchTurn";
 import SkeletonLoader from "@/components/SkeletonLoader";
-import ThemeToggle from "@/components/ThemeToggle";
 import useResearch from "@/hooks/useResearch";
 import useResearchStore from "@/stores/researchStore";
 import { useAuth } from "@/hooks/useAuth";
-import { AlertIcon, CheckCircleIcon } from "@/components/Icons";
 
 function ResearchContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const query = searchParams.get("q") || "";
-  const hasStarted = useRef(false);
-  const lastQuery = useRef("");
+  const urlQuery = searchParams.get("q") || "";
 
-  const { token, user, isAuthenticated, isLoading, logout } = useAuth();
+  const { token, isAuthenticated, isLoading } = useAuth();
 
   const {
     phase,
     phaseMessage,
-    subQueries,
     sources,
     answer,
-    followUps,
     isStreaming,
-    isDone,
-    doneData,
     error,
     startResearch,
-    stopResearch,
   } = useResearch();
 
   const { addRecentSearch } = useResearchStore();
+
+  // The conversation thread: completed turns, plus the one currently streaming.
+  const [turns, setTurns] = useState([]);
+  const [activeQuery, setActiveQuery] = useState(null);
+
+  const seedRef = useRef(null); // URL query that seeded the current thread
+  const sessionIdRef = useRef(null); // session id shared by every turn in the thread
+  const liveRef = useRef(null); // wrapper around the streaming turn (for auto-scroll)
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -47,137 +42,115 @@ function ResearchContent() {
     }
   }, [isAuthenticated, isLoading, router]);
 
-  // Start research when query changes
+  // Freeze a finished run into the thread. Runs from useResearch's SSE handler
+  // (an event callback, not an effect) once the answer/sources are final.
+  const handleComplete = useCallback((turn) => {
+    const sid = turn.doneData?.session_id;
+    if (sid && !sessionIdRef.current) sessionIdRef.current = sid;
+    setTurns((prev) => [
+      ...prev,
+      {
+        id: sid ? `${sid}-${prev.length}` : `${turn.query}-${Date.now()}`,
+        query: turn.query,
+        answer: turn.answer,
+        sources: turn.sources,
+        followUps: turn.followUps,
+        doneData: turn.doneData,
+      },
+    ]);
+    setActiveQuery(null);
+  }, []);
+
+  // A new URL query (from the home page or sidebar) starts a fresh thread.
+  // Follow-ups stay in-page and never touch the URL, so they don't reset it.
   useEffect(() => {
-    if (query && query !== lastQuery.current && token) {
-      lastQuery.current = query;
-      hasStarted.current = true;
-      addRecentSearch(query);
-      startResearch(query, 1, token);
+    if (!token || !urlQuery || urlQuery === seedRef.current) return;
+    seedRef.current = urlQuery;
+    sessionIdRef.current = null;
+    setTurns([]);
+    setActiveQuery(urlQuery);
+    addRecentSearch(urlQuery);
+    startResearch(urlQuery, 1, token, [], null, handleComplete);
+  }, [urlQuery, token, startResearch, addRecentSearch, handleComplete]);
+
+  // Ask a follow-up within the current thread, carrying the prior turns as
+  // context so the agent answers in continuation instead of from scratch.
+  const submitQuery = useCallback(
+    (q) => {
+      const trimmed = (q || "").trim();
+      if (!trimmed || isStreaming || activeQuery || !token) return;
+      const history = turns.map((t) => ({ query: t.query, answer: t.answer }));
+      addRecentSearch(trimmed);
+      setActiveQuery(trimmed);
+      startResearch(trimmed, 1, token, history, sessionIdRef.current, handleComplete);
+    },
+    [turns, isStreaming, activeQuery, token, startResearch, addRecentSearch, handleComplete]
+  );
+
+  // Bring each new question into view as it starts streaming.
+  useEffect(() => {
+    if (activeQuery && liveRef.current) {
+      liveRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [query, startResearch, addRecentSearch, token]);
+  }, [activeQuery]);
 
-  const handleNewSearch = (newQuery) => {
-    const encoded = encodeURIComponent(newQuery);
-    router.push(`/research?q=${encoded}`);
-  };
-
-  // Determine confidence class
-  const getConfidenceClass = (confidence) => {
-    if (confidence >= 0.8) return "confidence-high";
-    if (confidence >= 0.6) return "confidence-medium";
-    return "confidence-low";
-  };
+  const retry = useCallback(() => {
+    if (!activeQuery) return;
+    const history = turns.map((t) => ({ query: t.query, answer: t.answer }));
+    startResearch(activeQuery, 1, token, history, sessionIdRef.current, handleComplete);
+  }, [activeQuery, turns, token, startResearch, handleComplete]);
 
   const showSkeleton = isStreaming && !answer && sources.length === 0;
+  const hasThread = turns.length > 0 || Boolean(activeQuery);
 
   if (isLoading || !isAuthenticated) return null;
 
   return (
-    <>
-      <main className="main-content">
-        <div className="research-page">
-          {/* Query Display */}
-          <motion.h1
-            className="research-query-display"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4 }}
-          >
-            {query}
-          </motion.h1>
+    <main className="main-content">
+      <div className="research-page research-thread">
+        {turns.map((turn) => (
+          <ResearchTurn
+            key={turn.id}
+            query={turn.query}
+            sources={turn.sources}
+            answer={turn.answer}
+            isStreaming={false}
+            doneData={turn.doneData}
+            followUps={turn.followUps}
+            onFollowUp={submitQuery}
+          />
+        ))}
 
-          {/* Sources */}
-          {sources.length > 0 && <SourceCards sources={sources} />}
-
-          {/* Phase Indicator */}
-          {phase && !isDone && (
-            <PhaseIndicator phase={phase} message={phaseMessage} />
-          )}
-
-          {/* Error State */}
-          {error && (
-            <motion.div
-              className="error-container"
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-            >
-              <div className="error-icon">
-                <AlertIcon width={32} height={32} />
-              </div>
-              <div className="error-title">Something went wrong</div>
-              <div className="error-message">{error}</div>
-              <button
-                className="error-retry"
-                onClick={() => startResearch(query, 1, token)}
-              >
-                Try Again
-              </button>
-            </motion.div>
-          )}
-
-          {/* Skeleton Loading */}
-          {showSkeleton && !error && <SkeletonLoader />}
-
-          {/* Streaming Answer */}
-          {answer && (
-            <StreamingAnswer
+        {activeQuery && (
+          <div ref={liveRef}>
+            <ResearchTurn
+              query={activeQuery}
+              sources={sources}
               answer={answer}
               isStreaming={isStreaming}
-              sources={sources}
+              isLive
+              phase={phase}
+              phaseMessage={phaseMessage}
+              showSkeleton={showSkeleton}
+              error={error}
+              onRetry={retry}
             />
-          )}
+          </div>
+        )}
 
-          {/* Done Bar */}
-          {isDone && doneData && (
-            <motion.div
-              className="done-bar"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3 }}
-            >
-              <span
-                className={`confidence-badge ${getConfidenceClass(
-                  doneData.confidence
-                )}`}
-              >
-                <CheckCircleIcon width={14} height={14} />
-                {Math.round((doneData.confidence || 0) * 100)}% confidence
-              </span>
-              <span className="done-separator" />
-              <span className="done-stat">
-                <span className="done-stat-value">
-                  {doneData.total_sources || 0}
-                </span>{" "}
-                sources
-              </span>
-              <span className="done-separator" />
-              <span className="done-stat">
-                <span className="done-stat-value">
-                  {doneData.iterations || 1}
-                </span>{" "}
-                {doneData.iterations === 1 ? "iteration" : "iterations"}
-              </span>
-            </motion.div>
-          )}
-
-          {/* Follow-up Suggestions */}
-          {followUps.length > 0 && <FollowUpChips suggestions={followUps} />}
-
-          {/* New Search (after done) */}
-          {isDone && (
-            <motion.div
-              style={{ marginTop: "48px" }}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.5 }}
-            >
-              <SearchBar onSearch={handleNewSearch} mode="compact" />
-            </motion.div>
-          )}
-        </div>
-      </main>
-    </>
+        {hasThread && (
+          <div className="followup-composer">
+            <SearchBar
+              onSearch={submitQuery}
+              mode="compact"
+              placeholder="Ask a follow-up…"
+              disabled={isStreaming || Boolean(activeQuery)}
+              clearOnSubmit
+            />
+          </div>
+        )}
+      </div>
+    </main>
   );
 }
 

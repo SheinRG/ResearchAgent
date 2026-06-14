@@ -48,11 +48,22 @@ class AuthResponse(BaseModel):
 
 # --- Research Schemas ---
 
+class HistoryTurn(BaseModel):
+    """A prior question/answer exchange, supplied for follow-up context."""
+    query: str = Field(..., max_length=2000, description="The question asked in that turn")
+    answer: str = Field(default="", description="The answer given in that turn")
+
+
 class ResearchRequest(BaseModel):
     """Incoming research query from the frontend."""
     query: str = Field(..., min_length=1, max_length=2000, description="The research question")
     max_iterations: int = Field(default=1, ge=1, le=5, description="Max reflection loops")
     session_id: Optional[str] = Field(default=None, description="Existing session ID for follow-ups")
+    history: list[HistoryTurn] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Prior conversation turns for follow-up context",
+    )
 
 
 class SearchResult(BaseModel):

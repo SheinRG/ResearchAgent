@@ -12,6 +12,35 @@ def _replace(existing: Any, new: Any) -> Any:
     return new
 
 
+def format_history(
+    history: list[dict] | None,
+    max_turns: int = 4,
+    max_answer_chars: int = 600,
+) -> str:
+    """
+    Render prior conversation turns into a compact transcript for prompts.
+
+    Keeps the most recent ``max_turns`` exchanges and truncates each answer so
+    follow-up prompts stay grounded in context without blowing the token budget.
+    Returns an empty string when there is no usable history.
+    """
+    if not history:
+        return ""
+
+    lines: list[str] = []
+    for turn in history[-max_turns:]:
+        question = (turn.get("query") or "").strip()
+        answer = (turn.get("answer") or "").strip()
+        if len(answer) > max_answer_chars:
+            answer = answer[:max_answer_chars].rstrip() + "…"
+        if question:
+            lines.append(f"User: {question}")
+        if answer:
+            lines.append(f"Assistant: {answer}")
+
+    return "\n".join(lines)
+
+
 def _merge_lists(existing: list, new: list) -> list:
     """Reducer that merges two lists, deduplicating by URL for search results."""
     if not existing:
@@ -53,6 +82,7 @@ class ResearchState(TypedDict, total=False):
     # --- Input ---
     query: str                                          # Original user question
     max_iterations: int                                 # Max reflection loops allowed
+    history: list[dict]                                 # Prior {query, answer} turns for follow-up context
 
     # --- Planner Output ---
     sub_queries: list[str]                              # Decomposed sub-questions

@@ -364,6 +364,10 @@ async def research(
                 initial_state = {
                     "query": request.query,
                     "max_iterations": request.max_iterations,
+                    "history": [
+                        {"query": h.query, "answer": h.answer}
+                        for h in request.history
+                    ],
                     "iteration": 0,
                     "sub_queries": [],
                     "search_results": [],

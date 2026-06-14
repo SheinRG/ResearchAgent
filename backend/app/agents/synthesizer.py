@@ -10,7 +10,7 @@ from datetime import date
 
 from app.services.llm import get_llm_client
 from app.utils.citations import build_cited_context, extract_citations
-from app.agents.state import ResearchState
+from app.agents.state import ResearchState, format_history
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -32,13 +32,21 @@ WRITING RULES:
 - Write in clean Markdown. Do not include a "Sources" or "References" list at the end — the UI renders citations from the [n] markers."""
 
 SYNTHESIZER_PROMPT = """Today's date is {today}. Answer the question using ONLY the numbered sources below.
-
+{conversation_context}
 **Question:** {query}
 
 **Sources:**
 {context}
 
 Write a thorough, well-cited Markdown answer now. Every factual claim must carry a [n] citation that matches a source number above."""
+
+SYNTHESIZER_FOLLOWUP_GUIDANCE = (
+    "\nThis is a follow-up question in an ongoing conversation. Interpret it in "
+    "light of the exchange below and resolve references like \"it\" or \"they\" to "
+    "the entities already discussed. Answer the NEW question directly — build on "
+    "the prior context instead of repeating it.\n\n"
+    "**Conversation so far:**\n{history}\n"
+)
 
 
 async def synthesizer_node(state: ResearchState) -> dict:
@@ -54,6 +62,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
     query = state["query"]
     ranked_chunks = state.get("ranked_chunks", [])
     search_results = state.get("search_results", [])
+    history = state.get("history", [])
     sse_callback = state.get("sse_callback")
     settings = get_settings()
 
@@ -101,8 +110,16 @@ async def synthesizer_node(state: ResearchState) -> dict:
         if cited_sources:
             await sse_callback("sources", {"sources": cited_sources, "replace": True})
 
+    # Carry recent conversation into the prompt so a follow-up answer reads as a
+    # coherent continuation, while staying grounded strictly in the sources.
+    conversation_context = ""
+    history_text = format_history(history, max_answer_chars=800)
+    if history_text:
+        conversation_context = SYNTHESIZER_FOLLOWUP_GUIDANCE.format(history=history_text)
+
     prompt = SYNTHESIZER_PROMPT.format(
         today=date.today().isoformat(),
+        conversation_context=conversation_context,
         query=query,
         context=context,
     )

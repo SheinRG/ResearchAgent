@@ -4,12 +4,19 @@ import { motion, AnimatePresence } from "motion/react";
 import { useRouter } from "next/navigation";
 import { ArrowRightIcon } from "@/components/Icons";
 
-export default function FollowUpChips({ suggestions = [] }) {
+export default function FollowUpChips({ suggestions = [], onSelect = null, disabled = false }) {
   const router = useRouter();
 
   if (!suggestions || suggestions.length === 0) return null;
 
   const handleClick = (question) => {
+    if (disabled) return;
+    // In a thread, append the follow-up in place; otherwise fall back to a
+    // fresh research navigation (preserves standalone use of this component).
+    if (onSelect) {
+      onSelect(question);
+      return;
+    }
     const encoded = encodeURIComponent(question);
     router.push(`/research?q=${encoded}`);
   };

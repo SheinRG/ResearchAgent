@@ -57,7 +57,7 @@ REFLECTOR_PROMPT = """Evaluate this research answer for completeness and quality
 {answer}
 
 **Number of sources used:** {num_sources}
-
+{prior_questions}
 Evaluate the answer AND generate 3 follow-up questions. Respond with JSON only:"""
 
 
@@ -76,6 +76,7 @@ async def reflector_node(state: ResearchState) -> dict:
     draft_answer = state.get("draft_answer", "")
     sub_queries = state.get("sub_queries", [])
     search_results = state.get("search_results", [])
+    history = state.get("history", [])
     iteration = state.get("iteration", 0)
     max_iterations = state.get("max_iterations", 2)
     sse_callback = state.get("sse_callback")
@@ -92,12 +93,24 @@ async def reflector_node(state: ResearchState) -> dict:
     try:
         llm = get_llm_client()
 
+        # List earlier questions so suggested follow-ups don't repeat them.
+        prior_questions = ""
+        asked = [(t.get("query") or "").strip() for t in history if t.get("query")]
+        if asked:
+            prior_questions = (
+                "\n**Already asked in this conversation (do NOT suggest these or "
+                "close paraphrases):**\n"
+                + "\n".join(f"- {q}" for q in asked)
+                + "\n"
+            )
+
         # --- Single combined LLM call for reflection + follow-ups ---
         prompt = REFLECTOR_PROMPT.format(
             query=query,
             sub_queries="\n".join(f"- {q}" for q in sub_queries),
             answer=draft_answer[:3000],  # Limit length for evaluation
             num_sources=len(search_results),
+            prior_questions=prior_questions,
         )
 
         result = await llm.generate_structured(

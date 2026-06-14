@@ -8,7 +8,7 @@ import logging
 from datetime import date
 
 from app.services.llm import get_llm_client
-from app.agents.state import ResearchState
+from app.agents.state import ResearchState, format_history
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +22,14 @@ Rules:
 - Prefer authoritative angles (official data, primary sources, expert analysis)
 - Do NOT repeat the original question verbatim as a sub-query
 
+Follow-up handling (when a conversation is provided):
+- The new question may be a follow-up that relies on the earlier conversation. Resolve references like "it", "they", "that", "this", or "the company" to the ACTUAL named entities from the conversation.
+- Every sub-query MUST be self-contained: it is sent to a web search engine that has NO memory of the conversation, so spell out the real names, places, and topics instead of pronouns.
+
 Respond ONLY with valid JSON in this exact format:
 {{"sub_queries": ["sub-query 1", "sub-query 2", "sub-query 3"]}}"""
 
-PLANNER_PROMPT_TEMPLATE = """Break down this research question into 2-4 focused, searchable sub-queries:
+PLANNER_PROMPT_TEMPLATE = """{conversation_context}Break down this research question into 2-4 focused, searchable sub-queries:
 
 Question: {query}
 
@@ -46,6 +50,7 @@ async def planner_node(state: ResearchState) -> dict:
     """
     query = state["query"]
     iteration = state.get("iteration", 0)
+    history = state.get("history", [])
     sse_callback = state.get("sse_callback")
 
     logger.info("Planner: decomposing query (iteration %d): %s", iteration, query[:100])
@@ -69,7 +74,20 @@ async def planner_node(state: ResearchState) -> dict:
                 f"Focus the new sub-queries on filling these specific gaps."
             )
 
+    # Build conversation context for follow-up questions. Only the planner needs
+    # the full transcript to resolve references into self-contained sub-queries.
+    conversation_context = ""
+    history_text = format_history(history)
+    if history_text:
+        conversation_context = (
+            "This is a FOLLOW-UP question in an ongoing research conversation. "
+            "Use the conversation below to resolve any references to real entities, "
+            "then make every sub-query self-contained.\n\n"
+            f"Conversation so far:\n{history_text}\n\n"
+        )
+
     prompt = PLANNER_PROMPT_TEMPLATE.format(
+        conversation_context=conversation_context,
         query=query,
         refinement_context=refinement_context,
     )

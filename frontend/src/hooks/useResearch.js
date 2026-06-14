@@ -34,6 +34,14 @@ export default function useResearch() {
   const [error, setError] = useState(null);
 
   const abortRef = useRef(null);
+  // Mirror the streamed values in refs so that, the instant the run completes,
+  // we can hand a final snapshot to onComplete without waiting for a re-render.
+  const answerRef = useRef("");
+  const sourcesRef = useRef([]);
+  const followUpsRef = useRef([]);
+  const queryRef = useRef("");
+  const errorRef = useRef(null);
+  const onCompleteRef = useRef(null);
 
   const handleEvent = useCallback((type, data) => {
     switch (type) {
@@ -46,28 +54,32 @@ export default function useResearch() {
         setSubQueries(data.queries || []);
         break;
 
-      case "sources":
+      case "sources": {
         // `replace` carries the authoritative, citation-ordered list: index i
         // here is exactly the [i] marker in the answer, so swap it in wholesale.
+        let next;
         if (data.replace) {
-          setSources(data.sources || []);
+          next = data.sources || [];
         } else {
-          setSources((prev) => {
-            const existing = new Set(prev.map((s) => s.url));
-            const newSources = (data.sources || []).filter(
-              (s) => !existing.has(s.url)
-            );
-            return [...prev, ...newSources];
-          });
+          const existing = new Set(sourcesRef.current.map((s) => s.url));
+          const incoming = (data.sources || []).filter(
+            (s) => !existing.has(s.url)
+          );
+          next = [...sourcesRef.current, ...incoming];
         }
+        sourcesRef.current = next;
+        setSources(next);
         break;
+      }
 
       case "token":
-        setAnswer((prev) => prev + (data.token || ""));
+        answerRef.current += data.token || "";
+        setAnswer(answerRef.current);
         break;
 
       case "follow_up":
-        setFollowUps(data.suggestions || []);
+        followUpsRef.current = data.suggestions || [];
+        setFollowUps(followUpsRef.current);
         break;
 
       case "done":
@@ -75,10 +87,21 @@ export default function useResearch() {
         setDoneData(data);
         setPhase("done");
         setPhaseMessage("Research complete");
+        // Only hand off a finished turn when the run actually produced one.
+        if (!errorRef.current && onCompleteRef.current) {
+          onCompleteRef.current({
+            query: queryRef.current,
+            answer: answerRef.current,
+            sources: sourcesRef.current,
+            followUps: followUpsRef.current,
+            doneData: data,
+          });
+        }
         break;
 
       case "error":
-        setError(data.message || "An error occurred during research");
+        errorRef.current = data.message || "An error occurred during research";
+        setError(errorRef.current);
         break;
 
       default:
@@ -164,7 +187,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     handleEvent("done", { session_id: "mock-session-id", total_sources: 3, iterations: 1, confidence: 0.95 });
   }, [handleEvent]);
 
-  const startResearch = useCallback(async (query, maxIterations = 1, token = null) => {
+  const startResearch = useCallback(async (query, maxIterations = 1, token = null, history = [], sessionId = null, onComplete = null) => {
     // Reset state
     setPhase(null);
     setPhaseMessage("");
@@ -176,6 +199,14 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     setIsDone(false);
     setDoneData(null);
     setError(null);
+
+    // Reset the snapshot refs for this run and remember the completion handler.
+    answerRef.current = "";
+    sourcesRef.current = [];
+    followUpsRef.current = [];
+    errorRef.current = null;
+    queryRef.current = query;
+    onCompleteRef.current = onComplete;
 
     // Abort any previous request
     if (abortRef.current) {
@@ -193,7 +224,17 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
       const response = await fetch(`${API_BASE}/api/research`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ query, max_iterations: maxIterations }),
+        body: JSON.stringify({
+          query,
+          max_iterations: maxIterations,
+          // Prior turns let the agent resolve follow-up references and answer
+          // in context instead of treating every question as brand new.
+          history: (history || []).map((t) => ({
+            query: t.query,
+            answer: t.answer || "",
+          })),
+          ...(sessionId ? { session_id: sessionId } : {}),
+        }),
         signal: controller.signal,
       });
 
@@ -256,10 +297,12 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
           console.warn("[dev] Backend offline — simulating research stream.");
           await runSimulation(query, controller.signal);
         } else if (isNetworkError(err)) {
-          setError("Can't reach the research server. Please try again shortly.");
+          errorRef.current = "Can't reach the research server. Please try again shortly.";
+          setError(errorRef.current);
         } else {
           console.error("Research error:", err);
-          setError(err.message || "An unexpected error occurred");
+          errorRef.current = err.message || "An unexpected error occurred";
+          setError(errorRef.current);
         }
       }
     } finally {
