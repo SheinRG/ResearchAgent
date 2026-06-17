@@ -2,29 +2,59 @@
 
 import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
+import { useEffect, useState } from "react";
 import SearchBar from "@/components/SearchBar";
-import useResearchStore from "@/stores/researchStore";
 import { useAuth } from "@/hooks/useAuth";
-import { useEffect } from "react";
-import {
-  AtomIcon,
-  DnaIcon,
-  TrendingIcon,
-  CodeIcon,
-  ClockIcon,
-} from "@/components/Icons";
 
-const SUGGESTIONS = [
-  { icon: AtomIcon, label: "Breakthroughs in quantum computing" },
-  { icon: DnaIcon, label: "How mRNA vaccine technology works" },
-  { icon: TrendingIcon, label: "Top AI chip makers compared" },
-  { icon: CodeIcon, label: "Transformer architecture, explained" },
+// Time-aware openers, framed for someone who's here to *work* — so the late
+// hours nudge ("burning the midnight oil"), they don't sign off ("good night").
+// Phrased as statements so a ", Name" can be appended cleanly.
+const GREETINGS = {
+  morning: ["Good morning", "Morning", "Rise and shine", "Fresh start"],
+  afternoon: ["Good afternoon", "Afternoon", "Hope the day's going well"],
+  evening: ["Good evening", "Evening", "Winding down or digging in"],
+  night: [
+    "Burning the midnight oil",
+    "Working late",
+    "Late-night deep dive",
+    "Still going strong",
+  ],
+};
+
+// Rotating curiosity sub-line under the greeting.
+const PHRASES = [
+  "What's going on?",
+  "What are you curious about?",
+  "What do you want to know?",
+  "What's on your mind?",
+  "Let's dig into something.",
+  "Ask me anything.",
 ];
+
+function bucketForHour(hour) {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 22) return "evening";
+  return "night";
+}
+
+function pick(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 export default function HomePage() {
   const router = useRouter();
-  const { recentSearches } = useResearchStore();
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
+
+  // Greeting + phrase depend on the client clock and Math.random, so resolve
+  // them after mount to avoid a server/client hydration mismatch.
+  const [greeting, setGreeting] = useState("");
+  const [phrase, setPhrase] = useState("");
+
+  useEffect(() => {
+    setGreeting(pick(GREETINGS[bucketForHour(new Date().getHours())]));
+    setPhrase(pick(PHRASES));
+  }, []);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -37,88 +67,29 @@ export default function HomePage() {
     router.push(`/research?q=${encoded}`);
   };
 
-  const formatTime = (timestamp) => {
-    const diff = Date.now() - timestamp;
-    const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
-
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    return `${days}d ago`;
-  };
-
   if (isLoading || !isAuthenticated) return null;
 
+  const name = user?.name?.split(" ")[0];
+
   return (
-    <main className="main-content">
-      <div className="hero">
-        <motion.h1
-          className="hero-wordmark"
+    <main className="home-hero">
+      <div className="home-hero-inner">
+        <motion.div
+          className="home-greeting"
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.05 }}
         >
-          goon<span className="wordmark-accent">.ai</span>
-        </motion.h1>
-
-        <motion.p
-          className="hero-subtitle"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.45, delay: 0.2 }}
-        >
-          Research, with receipts. Every answer backed by sources you can check.
-        </motion.p>
-
-        <SearchBar onSearch={handleSearch} mode="large" />
-
-        <motion.div
-          className="suggestion-row"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.45, delay: 0.4 }}
-        >
-          {SUGGESTIONS.map(({ icon: Icon, label }) => (
-            <button
-              key={label}
-              className="suggestion-chip"
-              onClick={() => handleSearch(label)}
-            >
-              <Icon width={15} height={15} />
-              {label}
-            </button>
-          ))}
+          <h1 className="home-greeting-title">
+            {greeting}
+            {name ? <span className="home-greeting-name">, {name}</span> : null}
+          </h1>
+          <p className="home-greeting-sub">{phrase}</p>
         </motion.div>
 
-        {recentSearches.length > 0 && (
-          <motion.div
-            className="recent-section"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.6 }}
-          >
-            <div className="recent-label">Recent</div>
-            <div className="recent-list">
-              {recentSearches.slice(0, 4).map((search) => (
-                <a
-                  key={search.timestamp}
-                  className="recent-item"
-                  onClick={() => handleSearch(search.query)}
-                >
-                  <span className="recent-item-icon">
-                    <ClockIcon width={15} height={15} />
-                  </span>
-                  <span className="recent-item-text">{search.query}</span>
-                  <span className="recent-item-time">
-                    {formatTime(search.timestamp)}
-                  </span>
-                </a>
-              ))}
-            </div>
-          </motion.div>
-        )}
+        <div className="home-search">
+          <SearchBar onSearch={handleSearch} mode="large" />
+        </div>
       </div>
     </main>
   );
