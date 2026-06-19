@@ -36,6 +36,7 @@ bcrypt==4.2.1
 # --- File Processing ---
 pypdf==4.3.1
 python-docx==1.1.2
+python-multipart==0.0.20
 
 # --- Utilities ---
 python-dotenv==1.0.1
