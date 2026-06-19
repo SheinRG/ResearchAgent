@@ -6,41 +6,63 @@ import remarkGfm from "remark-gfm";
 import CitationTooltip from "./CitationTooltip";
 import { SparklesIcon } from "@/components/Icons";
 
-export default function StreamingAnswer({ answer = "", isStreaming = false, sources = [] }) {
-  const [hoveredCitation, setHoveredCitation] = useState(null);
+function CitationBadge({ idx, source }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <a
+        href={source?.url || "#"}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="citation-badge"
+        onClick={(e) => {
+          if (!source?.url) e.preventDefault();
+        }}
+      >
+        {idx}
+      </a>
+      {hovered && source && <CitationTooltip source={source} />}
+    </span>
+  );
+}
 
+export default function StreamingAnswer({ answer = "", isStreaming = false, sources = [] }) {
   // Custom components for react-markdown to render citation badges
   const markdownComponents = useMemo(() => ({
     // Override text rendering to replace [1], [2] with citation badges
     p: ({ children, ...props }) => {
       return (
         <p {...props}>
-          {processChildren(children, sources, hoveredCitation, setHoveredCitation)}
+          {processChildren(children, sources)}
         </p>
       );
     },
     li: ({ children, ...props }) => {
       return (
         <li {...props}>
-          {processChildren(children, sources, hoveredCitation, setHoveredCitation)}
+          {processChildren(children, sources)}
         </li>
       );
     },
     td: ({ children, ...props }) => {
       return (
         <td {...props}>
-          {processChildren(children, sources, hoveredCitation, setHoveredCitation)}
+          {processChildren(children, sources)}
         </td>
       );
     },
     th: ({ children, ...props }) => {
       return (
         <th {...props}>
-          {processChildren(children, sources, hoveredCitation, setHoveredCitation)}
+          {processChildren(children, sources)}
         </th>
       );
     },
-  }), [sources, hoveredCitation]);
+  }), [sources]);
 
   if (!answer) return null;
 
@@ -64,17 +86,15 @@ export default function StreamingAnswer({ answer = "", isStreaming = false, sour
 /**
  * Process React children to replace [N] patterns with citation badges.
  */
-function processChildren(children, sources, hoveredCitation, setHoveredCitation) {
+function processChildren(children, sources) {
   if (!children) return children;
 
   return Array.isArray(children)
-    ? children.map((child, i) =>
-        processNode(child, i, sources, hoveredCitation, setHoveredCitation)
-      )
-    : processNode(children, 0, sources, hoveredCitation, setHoveredCitation);
+    ? children.map((child, i) => processNode(child, i, sources))
+    : processNode(children, 0, sources);
 }
 
-function processNode(node, key, sources, hoveredCitation, setHoveredCitation) {
+function processNode(node, key, sources) {
   if (typeof node !== "string") return node;
 
   // Match [1], [2], etc. in text
@@ -86,30 +106,7 @@ function processNode(node, key, sources, hoveredCitation, setHoveredCitation) {
     if (match) {
       const idx = parseInt(match[1], 10);
       const source = sources[idx - 1]; // 1-indexed to 0-indexed
-
-      return (
-        <span
-          key={`${key}-${i}`}
-          style={{ position: "relative", display: "inline-block" }}
-          onMouseEnter={() => setHoveredCitation(idx)}
-          onMouseLeave={() => setHoveredCitation(null)}
-        >
-          <a
-            href={source?.url || "#"}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="citation-badge"
-            onClick={(e) => {
-              if (!source?.url) e.preventDefault();
-            }}
-          >
-            {idx}
-          </a>
-          {hoveredCitation === idx && source && (
-            <CitationTooltip source={source} />
-          )}
-        </span>
-      );
+      return <CitationBadge key={`${key}-${i}`} idx={idx} source={source} />;
     }
     return part;
   });
