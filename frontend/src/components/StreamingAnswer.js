@@ -26,6 +26,20 @@ export default function StreamingAnswer({ answer = "", isStreaming = false, sour
         </li>
       );
     },
+    td: ({ children, ...props }) => {
+      return (
+        <td {...props}>
+          {processChildren(children, sources, hoveredCitation, setHoveredCitation)}
+        </td>
+      );
+    },
+    th: ({ children, ...props }) => {
+      return (
+        <th {...props}>
+          {processChildren(children, sources, hoveredCitation, setHoveredCitation)}
+        </th>
+      );
+    },
   }), [sources, hoveredCitation]);
 
   if (!answer) return null;
