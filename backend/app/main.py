@@ -11,7 +11,7 @@ from app.models.database import init_db, close_db
 from app.services.llm import get_llm_client
 from app.services.cache import close_redis
 from app.services.scraper import close_scraper
-from app.routers import auth, research, sessions, upload
+from app.routers import auth, research, sessions, upload, notes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,6 +79,7 @@ app.include_router(auth.router)
 app.include_router(research.router)
 app.include_router(sessions.router)
 app.include_router(upload.router)
+app.include_router(notes.router)
 
 
 @app.get("/api/health")
