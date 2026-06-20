@@ -2046,21 +2046,31 @@ body::before {
 }
 
 .rate-limit-track {
-    height: 3px;
+    height: 6px;
     background: var(--border-subtle);
-    border-radius: 2px;
+    border-radius: 3px;
     overflow: hidden;
+    box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 .rate-limit-fill {
     height: 100%;
     background: var(--accent-color);
-    border-radius: 2px;
-    transition: width 0.4s ease;
+    border-radius: 3px;
+    transition: width 0.4s ease, background 0.3s ease;
+}
+
+/* Shift toward warning colors as the hourly quota is consumed. */
+.rate-limit-fill--warn {
+    background: #d97706;
+}
+
+.rate-limit-fill--danger {
+    background: #dc2626;
 }
 
 .rate-limit-label {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-tertiary);
     letter-spacing: 0.02em;
 }

@@ -427,19 +427,26 @@ export default function AppLayout({ children }) {
 
           {/* Profile footer */}
           <div className="sidebar-footer">
-            {rateLimit && (
-              <div className="rate-limit-bar">
-                <div className="rate-limit-track">
-                  <div
-                    className="rate-limit-fill"
-                    style={{ width: `${Math.min(100, (rateLimit.used / rateLimit.limit) * 100)}%` }}
-                  />
+            {rateLimit && (() => {
+              const usedRatio = rateLimit.limit ? rateLimit.used / rateLimit.limit : 0;
+              const fillTone =
+                usedRatio >= 0.9 ? " rate-limit-fill--danger"
+                : usedRatio >= 0.7 ? " rate-limit-fill--warn"
+                : "";
+              return (
+                <div className="rate-limit-bar">
+                  <div className="rate-limit-track">
+                    <div
+                      className={`rate-limit-fill${fillTone}`}
+                      style={{ width: `${Math.min(100, usedRatio * 100)}%` }}
+                    />
+                  </div>
+                  <span className="rate-limit-label">
+                    {rateLimit.remaining} / {rateLimit.limit} queries left this hour
+                  </span>
                 </div>
-                <span className="rate-limit-label">
-                  {rateLimit.remaining} / {rateLimit.limit} queries left this hour
-                </span>
-              </div>
-            )}
+              );
+            })()}
             <button
               className="profile-trigger"
               onClick={() => setProfileOpen((v) => !v)}
