@@ -18,12 +18,28 @@ import {
   PenIcon,
 } from "@/components/Icons";
 
+/** Strip markdown and citation markers to produce clean plain text. */
+function toPlainText(md = "") {
+  return md
+    .replace(/\[(\d+)\]/g, "")                   // [1] [2] citation markers
+    .replace(/#{1,6}\s+/g, "")                    // headings
+    .replace(/\*\*(.+?)\*\*/gs, "$1")             // bold
+    .replace(/\*(.+?)\*/gs, "$1")                 // italic
+    .replace(/`{3}[\s\S]*?`{3}/g, "")            // fenced code blocks
+    .replace(/`(.+?)`/g, "$1")                    // inline code
+    .replace(/^\s*[-*+]\s+/gm, "")               // unordered list bullets
+    .replace(/^\s*\d+\.\s+/gm, "")               // ordered list numbers
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")      // [text](url) → text
+    .replace(/\n{3,}/g, "\n\n")                   // collapse excess blank lines
+    .trim();
+}
+
 /** Copy-to-clipboard button with a transient "Copied" flash. */
-function CopyButton({ text, title = "Copy", size = 14 }) {
+function CopyButton({ text, title = "Copy", size = 14, clean = false }) {
   const [copied, setCopied] = useState(false);
   const onCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(clean ? toPlainText(text) : text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -172,7 +188,7 @@ export default function ResearchTurn({
       {/* Feedback actions — once the answer is complete */}
       {isDone && answer && (
         <div className="msg-actions msg-actions-ai">
-          <CopyButton text={answer} title="Copy answer" size={15} />
+          <CopyButton text={answer} title="Copy answer" size={15} clean />
           {canAct && (
             <button
               className="msg-action-btn"
