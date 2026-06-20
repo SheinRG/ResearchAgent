@@ -78,6 +78,18 @@ export default function ResearchTurn({
   const canAct = Boolean(onFollowUp);
   const isDone = Boolean(doneData) && !isStreaming;
 
+  // Parse typed errors — prefix:message format from useResearch
+  const errorType = error?.startsWith("rate_limit:") ? "rate_limit"
+    : error?.startsWith("network:") ? "network"
+    : error ? "generic" : null;
+  const errorMessage = error?.includes(":") ? error.split(":").slice(1).join(":") : error;
+
+  const errorTitles = {
+    rate_limit: "Query limit reached",
+    network: "Connection error",
+    generic: "Something went wrong",
+  };
+
   const resend = () => onFollowUp?.(query);
 
   const saveEdit = () => {
@@ -101,21 +113,36 @@ export default function ResearchTurn({
         <PhaseIndicator phase={phase} message={phaseMessage} />
       )}
 
-      {isLive && error && (
+      {isLive && errorType && (
         <motion.div
-          className="error-container"
+          className={`error-container error-type-${errorType}`}
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
         >
           <div className="error-icon">
             <AlertIcon width={32} height={32} />
           </div>
-          <div className="error-title">Something went wrong</div>
-          <div className="error-message">{error}</div>
-          {onRetry && (
+          <div className="error-title">{errorTitles[errorType]}</div>
+          <div className="error-message">{errorMessage}</div>
+          {onRetry && errorType !== "rate_limit" && (
             <button className="error-retry" onClick={onRetry}>
               Try again
             </button>
+          )}
+        </motion.div>
+      )}
+
+      {/* No-results state: done but empty answer */}
+      {doneData && !answer && !isStreaming && !errorType && (
+        <motion.div
+          className="error-container error-type-empty"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+        >
+          <div className="error-title">No results found</div>
+          <div className="error-message">The search didn't return enough information to answer this question. Try rephrasing or asking something more specific.</div>
+          {onRetry && (
+            <button className="error-retry" onClick={onRetry}>Try again</button>
           )}
         </motion.div>
       )}

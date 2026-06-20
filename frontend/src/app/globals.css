@@ -1598,6 +1598,26 @@ body::before {
     background: var(--accent-hover);
 }
 
+.error-type-rate_limit {
+    border-color: rgba(234, 179, 8, 0.3);
+    background: rgba(234, 179, 8, 0.06);
+}
+.error-type-rate_limit .error-title,
+.error-type-rate_limit .error-icon { color: #ca8a04; }
+
+.error-type-network {
+    border-color: rgba(59, 130, 246, 0.25);
+    background: rgba(59, 130, 246, 0.05);
+}
+.error-type-network .error-title,
+.error-type-network .error-icon { color: #2563eb; }
+
+.error-type-empty {
+    border-color: var(--border-subtle);
+    background: var(--bg-secondary);
+}
+.error-type-empty .error-title { color: var(--text-secondary); }
+
 /* ============================================================
    AUTH PAGES
    ============================================================ */

@@ -264,24 +264,22 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
       });
 
       if (!response.ok) {
-        // Surface a friendly, specific message for known statuses.
         let detail = "";
         try {
           const body = await response.json();
           detail = body?.detail || "";
-        } catch {
-          // non-JSON body; ignore
-        }
+        } catch { /* non-JSON body */ }
+
         if (response.status === 401) {
-          // Invalid/expired/stale token (e.g. a leftover dev-mock token).
-          // Clear the session and bounce to login so the user can get a
-          // fresh, valid token instead of looping on the same 401.
           setError("Your session has expired. Please sign in again.");
           logout();
           return;
         }
         if (response.status === 429) {
-          throw new Error(detail || "You've hit the hourly query limit. Please try again later.");
+          throw new Error("rate_limit:Query limit reached for this hour. Your quota resets every 60 minutes — check the sidebar for remaining queries.");
+        }
+        if (response.status === 503 || response.status === 502) {
+          throw new Error("The research server is temporarily unavailable. Please try again in a moment.");
         }
         throw new Error(detail || `The server responded with an error (${response.status}).`);
       }
@@ -322,7 +320,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
           console.warn("[dev] Backend offline — simulating research stream.");
           await runSimulation(query, controller.signal);
         } else if (isNetworkError(err)) {
-          errorRef.current = "Can't reach the research server. Please try again shortly.";
+          errorRef.current = "network:Can't reach the research server. Check your connection and try again.";
           setError(errorRef.current);
         } else {
           console.error("Research error:", err);
