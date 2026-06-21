@@ -5,6 +5,7 @@ generates a comprehensive answer with [1], [2] markers that map exactly to
 that list — streaming tokens via the (stronger) synthesis model.
 """
 
+import asyncio
 import logging
 from datetime import date
 
@@ -14,6 +15,69 @@ from app.agents.state import ResearchState, format_history
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# --- Follow-up suggestions ---------------------------------------------------
+# Generated in a small, fast call that runs CONCURRENTLY with the (slow) answer
+# stream, so suggestions are ready by the time the answer finishes — this is what
+# replaces the old trailing reflector round-trip that used to block completion.
+FOLLOWUP_SYSTEM = """You generate short, natural follow-up questions a curious reader might ask next after researching a topic.
+
+Rules:
+- Generate exactly 3 follow-ups that explore related but DIFFERENT angles, or go deeper into a specific aspect.
+- Each must be specific, web-searchable, and self-contained (name the real entities — no "it"/"they").
+- Do NOT repeat or paraphrase the original question or any already-asked question.
+
+Respond ONLY with valid JSON: {"suggestions": ["question 1", "question 2", "question 3"]}"""
+
+FOLLOWUP_PROMPT = """Original question: {query}
+
+Aspects already researched:
+{sub_queries}
+
+Top sources found:
+{sources}
+{prior}
+Generate 3 follow-up questions. JSON only:"""
+
+
+async def _generate_follow_ups(
+    query: str,
+    sub_queries: list[str],
+    cited_sources: list[dict],
+    history: list[dict],
+) -> list[str]:
+    """Suggest 3 follow-up questions from the question + sources (best-effort)."""
+    try:
+        asked = [(t.get("query") or "").strip() for t in history if t.get("query")]
+        prior = ""
+        if asked:
+            prior = (
+                "\nAlready asked (do NOT repeat or paraphrase these):\n"
+                + "\n".join(f"- {q}" for q in asked)
+                + "\n"
+            )
+
+        source_titles = "\n".join(
+            f"- {s.get('title', '')}" for s in cited_sources[:6] if s.get("title")
+        ) or "(none)"
+
+        llm = get_llm_client()
+        result = await llm.generate_structured(
+            prompt=FOLLOWUP_PROMPT.format(
+                query=query,
+                sub_queries="\n".join(f"- {q}" for q in sub_queries) or "(none)",
+                sources=source_titles,
+                prior=prior,
+            ),
+            system=FOLLOWUP_SYSTEM,
+            temperature=0.5,
+        )
+        suggestions = result.get("suggestions", [])
+        if isinstance(suggestions, list):
+            return [s.strip() for s in suggestions if isinstance(s, str) and s.strip()][:4]
+    except Exception as e:
+        logger.warning("Follow-up generation failed: %s", e)
+    return []
 
 SYNTHESIZER_SYSTEM = """You are an expert research analyst. You write accurate, concise, information-dense answers grounded strictly in the numbered sources provided. You answer like Perplexity: get straight to the point, then add only what the question actually needs.
 
@@ -83,6 +147,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
     ranked_chunks = state.get("ranked_chunks", [])
     search_results = state.get("search_results", [])
     history = state.get("history", [])
+    sub_queries = state.get("sub_queries", [])
     sse_callback = state.get("sse_callback")
     settings = get_settings()
 
@@ -186,6 +251,17 @@ async def synthesizer_node(state: ResearchState) -> dict:
         personalization=personalization,
     )
 
+    # Kick off follow-up generation NOW so the small auxiliary call overlaps the
+    # slow answer stream instead of adding a round-trip after it.
+    followup_task = asyncio.ensure_future(
+        _generate_follow_ups(query, sub_queries, cited_sources, history)
+    )
+
+    # Confidence is a simple, honest heuristic: more corroborating sources ⇒ more
+    # confidence. (Replaces the reflector's per-answer LLM guess, which we dropped
+    # from the critical path.)
+    confidence = round(min(0.9, 0.5 + 0.08 * len(cited_sources)), 2)
+
     try:
         llm = get_llm_client()
         full_answer = ""
@@ -205,20 +281,30 @@ async def synthesizer_node(state: ResearchState) -> dict:
         citations = extract_citations(full_answer, cited_sources)
         citation_dicts = [c.model_dump() for c in citations]
 
+        # The follow-up call has been running alongside the stream; collect it
+        # (already finished by now) and stream the suggestions to the UI.
+        follow_ups = await followup_task
+        if sse_callback and follow_ups:
+            await sse_callback("follow_up", {"suggestions": follow_ups})
+
         logger.info(
-            "Synthesizer: generated %d char answer, %d sources, %d citations",
-            len(full_answer), len(cited_sources), len(citation_dicts),
+            "Synthesizer: generated %d char answer, %d sources, %d citations, %d follow-ups",
+            len(full_answer), len(cited_sources), len(citation_dicts), len(follow_ups),
         )
 
         return {
             "draft_answer": full_answer,
             "citations": citation_dicts,
             "all_sources": cited_sources,
+            "follow_up_suggestions": follow_ups,
+            "confidence": confidence,
+            "iteration": 1,
             "phase": "writing",
         }
 
     except Exception as e:
         logger.error("Synthesizer failed: %s", e)
+        followup_task.cancel()
         error_answer = (
             "I encountered an error while generating the answer. "
             "Please try again or rephrase your question."
@@ -227,6 +313,9 @@ async def synthesizer_node(state: ResearchState) -> dict:
             "draft_answer": error_answer,
             "citations": [],
             "all_sources": cited_sources,
+            "follow_up_suggestions": [],
+            "confidence": confidence,
+            "iteration": 1,
             "phase": "writing",
             "error": f"Synthesizer error: {str(e)}",
         }

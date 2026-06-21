@@ -46,10 +46,13 @@ class Settings(BaseSettings):
     auth_token_expiry_hours: int = 72  # 3 days
 
     # --- Agent Settings ---
-    max_iterations: int = 2
+    max_iterations: int = 1
     max_sub_queries: int = 4
     search_results_per_query: int = 5
-    scrape_top_n: int = 3
+    # Scrape fewer pages per sub-query: the reranker already trims to top_k, so
+    # reading 2 (not 3) pages per sub-query cuts the slowest pipeline step with
+    # negligible answer-quality impact.
+    scrape_top_n: int = 2
     chunk_size: int = 500
     chunk_overlap: int = 50
     rerank_top_k: int = 12
@@ -57,12 +60,16 @@ class Settings(BaseSettings):
     max_cited_sources: int = 8
 
     # --- Re-ranker ---
-    # ms-marco-MiniLM-L-12-v2 ranks noticeably better than the TinyBERT nano
-    # model for a small CPU cost. Use "ms-marco-TinyBERT-L-2-v2" for max speed.
-    reranker_model: str = "ms-marco-MiniLM-L-12-v2"
+    # TinyBERT-L-2 is the speed-first model: a 2-layer cross-encoder that reranks
+    # several times faster on CPU than MiniLM-L-12. The synthesizer still sees the
+    # top-k chunks, so the small ranking-quality trade is worth the latency cut.
+    # Use "ms-marco-MiniLM-L-12-v2" if you want max ranking quality over speed.
+    reranker_model: str = "ms-marco-TinyBERT-L-2-v2"
 
     # --- Scraper ---
-    scrape_timeout: int = 15
+    # Cap per-page fetch at 8s so a single slow/hanging page can't dominate the
+    # batch and stall the whole research run (was 15s).
+    scrape_timeout: int = 8
     scrape_max_concurrent: int = 8
 
     # --- Rate Limiting ---

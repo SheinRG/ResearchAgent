@@ -1,7 +1,12 @@
 """
 LangGraph State Graph — Wiring all agent nodes together.
 Defines the research agent as a state machine:
-Planner → Researcher → Reranker → Synthesizer → Reflector → (loop or end)
+Triage (route + plan) → Researcher → Reranker → Synthesizer → end
+
+The triage node both routes (chat vs research) and plans the sub-queries in one
+LLM call, and the synthesizer generates follow-ups concurrently with the answer
+stream — so the pipeline is a single forward pass with no trailing reflector
+round-trip and no separate planner call.
 """
 
 import logging
@@ -12,10 +17,8 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agents.state import ResearchState
 from app.agents.router import router_node
 from app.agents.conversational import conversational_node
-from app.agents.planner import planner_node
 from app.agents.researcher import researcher_node, rerank_node
 from app.agents.synthesizer import synthesizer_node
-from app.agents.reflector import reflector_node
 
 logger = logging.getLogger(__name__)
 
@@ -25,32 +28,12 @@ def route_mode(state: ResearchState) -> str:
     return "chat" if state.get("mode") == "chat" else "research"
 
 
-def should_continue(state: ResearchState) -> str:
-    """
-    Conditional edge: decides whether to loop back to planner or end.
-
-    Returns:
-        'planner' if gaps found and iterations remain, 'end' otherwise.
-    """
-    reflection = state.get("reflection", {})
-    should_loop = reflection.get("should_continue", False)
-    iteration = state.get("iteration", 0)
-    max_iterations = state.get("max_iterations", 2)
-
-    if should_loop and iteration < max_iterations:
-        logger.info("Reflector decided to loop (iteration %d/%d)", iteration, max_iterations)
-        return "planner"
-    else:
-        logger.info("Reflector decided to end (confidence=%.2f)", state.get("confidence", 0))
-        return "end"
-
-
 def build_research_graph() -> StateGraph:
     """
     Build and compile the LangGraph research agent.
 
     Graph flow:
-        planner → researcher → reranker → synthesizer → reflector → (planner | end)
+        router → (chat → conversational) | (research → researcher → reranker → synthesizer)
 
     Returns:
         Compiled StateGraph ready for invocation.
@@ -60,37 +43,26 @@ def build_research_graph() -> StateGraph:
     # Add nodes
     graph.add_node("router", router_node)
     graph.add_node("conversational", conversational_node)
-    graph.add_node("planner", planner_node)
     graph.add_node("researcher", researcher_node)
     graph.add_node("reranker", rerank_node)
     graph.add_node("synthesizer", synthesizer_node)
-    graph.add_node("reflector", reflector_node)
 
-    # Triage first: route casual/simple messages to a direct chat reply, and
-    # only send genuine research questions through the full pipeline.
+    # Triage first: a casual/simple message gets a direct chat reply; a genuine
+    # research question goes straight into the pipeline (sub-queries were already
+    # planned inside the triage call, so there is no separate planner step).
     graph.set_entry_point("router")
     graph.add_conditional_edges(
         "router",
         route_mode,
-        {"chat": "conversational", "research": "planner"},
+        {"chat": "conversational", "research": "researcher"},
     )
     graph.add_edge("conversational", END)
 
-    # Define edges
-    graph.add_edge("planner", "researcher")
+    # Research pipeline: one forward pass, ending at the synthesizer (which also
+    # emits follow-up suggestions before it returns).
     graph.add_edge("researcher", "reranker")
     graph.add_edge("reranker", "synthesizer")
-    graph.add_edge("synthesizer", "reflector")
-
-    # Conditional edge from reflector
-    graph.add_conditional_edges(
-        "reflector",
-        should_continue,
-        {
-            "planner": "planner",
-            "end": END,
-        },
-    )
+    graph.add_edge("synthesizer", END)
 
     compiled = graph.compile()
     logger.info("Research graph compiled successfully")

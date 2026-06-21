@@ -73,7 +73,7 @@ class HistoryTurn(BaseModel):
 class ResearchRequest(BaseModel):
     """Incoming research query from the frontend."""
     query: str = Field(..., min_length=1, max_length=2000, description="The research question")
-    max_iterations: int = Field(default=2, ge=1, le=5, description="Max reflection loops")
+    max_iterations: int = Field(default=1, ge=1, le=5, description="Max reflection loops")
     session_id: Optional[str] = Field(default=None, description="Existing session ID for follow-ups")
     history: list[HistoryTurn] = Field(
         default_factory=list,
