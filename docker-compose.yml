@@ -55,6 +55,11 @@ services:
       - RATE_LIMIT_PER_HOUR=${RATE_LIMIT_PER_HOUR:-30}
       - LOG_LEVEL=INFO
       - CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000","http://localhost:3001","http://127.0.0.1:3001"]
+      # Hot-reload via polling instead of inotify. Over Docker bind mounts on
+      # Windows/WSL2 the Rust notify watcher intermittently dies with
+      # "Cannot allocate memory (os error 12)", restarting the server and
+      # dropping in-flight requests (the "Connection error" in the UI).
+      - WATCHFILES_FORCE_POLLING=true
     depends_on:
       postgres:
         condition: service_healthy
