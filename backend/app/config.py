@@ -60,7 +60,8 @@ class Settings(BaseSettings):
     auth_secret: str = "change-me-in-production-use-a-random-string"
     google_client_id: str = ""
     google_client_secret: str = ""
-    auth_token_expiry_hours: int = 72  # 3 days
+    auth_token_expiry_hours: int = 1   # short-lived; refresh tokens handle silent re-issue
+    refresh_token_expiry_days: int = 30
 
     # --- Agent Settings ---
     max_iterations: int = 1

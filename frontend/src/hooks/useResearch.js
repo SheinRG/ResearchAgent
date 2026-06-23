@@ -21,7 +21,7 @@ const isNetworkError = (error) =>
  * phase updates, sources, tokens, follow-ups, and done signals.
  */
 export default function useResearch() {
-  const { logout } = useAuth();
+  const { logout, refreshSession } = useAuth();
   const [phase, setPhase] = useState(null);
   const [phaseMessage, setPhaseMessage] = useState("");
   const [subQueries, setSubQueries] = useState([]);
@@ -210,7 +210,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     handleEvent("done", { session_id: "mock-session-id", total_sources: 3, iterations: 1, confidence: 0.95 });
   }, [handleEvent]);
 
-  const startResearch = useCallback(async (query, maxIterations = 1, token = null, history = [], sessionId = null, onComplete = null) => {
+  const startResearch = useCallback(async (query, maxIterations = 1, token = null, history = [], sessionId = null, onComplete = null, _isRetry = false) => {
     // Reset state
     setPhase(null);
     setPhaseMessage("");
@@ -271,6 +271,13 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
         } catch { /* non-JSON body */ }
 
         if (response.status === 401) {
+          if (!_isRetry) {
+            const newToken = await refreshSession();
+            if (newToken) {
+              await startResearch(query, maxIterations, newToken, history, sessionId, onComplete, true);
+              return;
+            }
+          }
           setError("Your session has expired. Please sign in again.");
           logout();
           return;
@@ -331,7 +338,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     } finally {
       setIsStreaming(false);
     }
-  }, [handleEvent, runSimulation, logout]);
+  }, [handleEvent, runSimulation, logout, refreshSession]);
 
   const stopResearch = useCallback(() => {
     if (abortRef.current) {

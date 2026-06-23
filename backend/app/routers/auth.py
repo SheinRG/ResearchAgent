@@ -7,7 +7,7 @@ import time
 import uuid
 import logging
 
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -25,12 +25,45 @@ from app.services.auth import (
     create_token,
     validate_token,
     verify_google_token,
+    create_refresh_token,
+    store_refresh_token,
+    validate_and_rotate_refresh_token,
+    revoke_refresh_token,
 )
 from app.services.cache import get_redis
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _refresh_expiry() -> int:
+    return get_settings().refresh_token_expiry_days * 86400
+
+
+def _set_refresh_cookie(response: Response, token: str) -> None:
+    settings = get_settings()
+    secure = settings.environment == "production"
+    response.set_cookie(
+        key="refresh_token",
+        value=token,
+        max_age=_refresh_expiry(),
+        httponly=True,
+        secure=secure,
+        samesite="none" if secure else "lax",
+        path="/api/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    settings = get_settings()
+    secure = settings.environment == "production"
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api/auth",
+        secure=secure,
+        samesite="none" if secure else "lax",
+    )
 
 
 async def get_current_user(request: Request) -> dict:
@@ -117,7 +150,7 @@ async def check_rate_limit(user_id: str) -> None:
 
 
 @router.post("/register")
-async def register(request: RegisterRequest):
+async def register(request: RegisterRequest, response: Response):
     factory = get_session_factory()
     async with factory() as db:
         result = await db.execute(select(User).where(User.email == request.email))
@@ -133,12 +166,15 @@ async def register(request: RegisterRequest):
         db.add(user)
         await db.commit()
         token = create_token(user.id, user.email, user.name)
+        refresh_tok = create_refresh_token()
+        await store_refresh_token(user.id, refresh_tok, _refresh_expiry())
+        _set_refresh_cookie(response, refresh_tok)
         logger.info("New user registered: %s", user.email)
         return AuthResponse(token=token, user={"id": user.id, "email": user.email, "name": user.name, "preferred_name": user.preferred_name or ""})
 
 
 @router.post("/login")
-async def login(request: LoginRequest):
+async def login(request: LoginRequest, response: Response):
     factory = get_session_factory()
     async with factory() as db:
         result = await db.execute(select(User).where(User.email == request.email))
@@ -148,12 +184,15 @@ async def login(request: LoginRequest):
         if not verify_password(request.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Invalid credentials")
         token = create_token(user.id, user.email, user.name)
+        refresh_tok = create_refresh_token()
+        await store_refresh_token(user.id, refresh_tok, _refresh_expiry())
+        _set_refresh_cookie(response, refresh_tok)
         logger.info("User logged in: %s", user.email)
         return AuthResponse(token=token, user={"id": user.id, "email": user.email, "name": user.name, "preferred_name": user.preferred_name or ""})
 
 
 @router.post("/google")
-async def google_auth(request: GoogleAuthRequest):
+async def google_auth(request: GoogleAuthRequest, response: Response):
     google_info = await verify_google_token(request.credential)
     if not google_info:
         raise HTTPException(status_code=401, detail="Invalid Google credential")
@@ -184,6 +223,9 @@ async def google_auth(request: GoogleAuthRequest):
             db.add(user)
             await db.commit()
         token = create_token(user.id, user.email, user.name)
+        refresh_tok = create_refresh_token()
+        await store_refresh_token(user.id, refresh_tok, _refresh_expiry())
+        _set_refresh_cookie(response, refresh_tok)
         logger.info("Google auth: %s", user.email)
         return AuthResponse(token=token, user={"id": user.id, "email": user.email, "name": user.name, "preferred_name": user.preferred_name or ""})
 
@@ -229,6 +271,42 @@ async def update_profile(
             "name": db_user.name,
             "preferred_name": db_user.preferred_name or "",
         }
+
+
+@router.post("/refresh")
+async def refresh_tokens(request: Request, response: Response):
+    """
+    Exchange a valid refresh token cookie for a new access token + rotated refresh token.
+    The old refresh token is deleted atomically — reuse of a stolen token is detected here.
+    """
+    old_tok = request.cookies.get("refresh_token")
+    if not old_tok:
+        raise HTTPException(status_code=401, detail="No refresh token")
+    result = await validate_and_rotate_refresh_token(old_tok)
+    if result is None:
+        _clear_refresh_cookie(response)
+        raise HTTPException(status_code=401, detail="Refresh token invalid or expired")
+    user_id, new_tok = result
+    factory = get_session_factory()
+    async with factory() as db:
+        user = await db.get(User, user_id)
+        if not user:
+            _clear_refresh_cookie(response)
+            raise HTTPException(status_code=401, detail="User not found")
+    _set_refresh_cookie(response, new_tok)
+    token = create_token(user.id, user.email, user.name)
+    logger.info("Token refreshed for user: %s", user.email)
+    return AuthResponse(token=token, user={"id": user.id, "email": user.email, "name": user.name, "preferred_name": user.preferred_name or ""})
+
+
+@router.post("/logout")
+async def logout_user(request: Request, response: Response):
+    """Revoke the refresh token and clear the cookie."""
+    old_tok = request.cookies.get("refresh_token")
+    if old_tok:
+        await revoke_refresh_token(old_tok)
+    _clear_refresh_cookie(response)
+    return {"message": "Logged out"}
 
 
 @router.get("/rate-limit")

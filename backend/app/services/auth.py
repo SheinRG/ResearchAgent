@@ -5,6 +5,8 @@ Provides stateless auth for the FastAPI backend.
 
 import jwt
 import bcrypt
+import hashlib
+import secrets
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -69,6 +71,58 @@ def validate_token(token: str) -> Optional[dict]:
     except jwt.InvalidTokenError as e:
         logger.warning("Invalid token: %s", e)
         return None
+
+
+_REFRESH_PREFIX = "refresh:"
+
+
+def _refresh_key(token: str) -> str:
+    h = hashlib.sha256(token.encode()).hexdigest()
+    return f"{_REFRESH_PREFIX}{h}"
+
+
+def create_refresh_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+async def store_refresh_token(user_id: str, token: str, expiry_seconds: int) -> None:
+    from app.services.cache import get_redis
+    redis = await get_redis()
+    if redis is None:
+        logger.warning("Redis unavailable — refresh token not persisted; user will need to re-login when access token expires")
+        return
+    await redis.set(_refresh_key(token), user_id, ex=expiry_seconds)
+
+
+async def validate_and_rotate_refresh_token(token: str) -> Optional[tuple[str, str]]:
+    """
+    Look up token in Redis, delete it, issue a new one (rotation).
+    Returns (user_id, new_token) or None if token is invalid/expired/Redis down.
+    Rotation means a stolen token is detected the next time the legitimate user refreshes.
+    """
+    from app.services.cache import get_redis
+    redis = await get_redis()
+    if redis is None:
+        return None
+    key = _refresh_key(token)
+    user_id = await redis.get(key)
+    if not user_id:
+        return None
+    settings = get_settings()
+    new_token = create_refresh_token()
+    pipe = redis.pipeline()
+    pipe.delete(key)
+    pipe.set(_refresh_key(new_token), user_id, ex=settings.refresh_token_expiry_days * 86400)
+    await pipe.execute()
+    return user_id, new_token
+
+
+async def revoke_refresh_token(token: str) -> None:
+    from app.services.cache import get_redis
+    redis = await get_redis()
+    if redis is None:
+        return
+    await redis.delete(_refresh_key(token))
 
 
 async def verify_google_token(credential: str) -> Optional[dict]:

@@ -59,6 +59,7 @@ export function AuthProvider({ children }) {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password }),
       });
       
@@ -92,6 +93,7 @@ export function AuthProvider({ children }) {
       const res = await fetch(`${API_BASE}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ email, password, name }),
       });
       
@@ -125,6 +127,7 @@ export function AuthProvider({ children }) {
       const res = await fetch(`${API_BASE}/api/auth/google`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ credential }),
       });
       
@@ -143,9 +146,34 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+    } catch {
+      // ignore — clear local state regardless
+    }
     clearAuth();
   }, [clearAuth]);
+
+  // Silently exchange the refresh token cookie for a new access token.
+  // Returns the new token string on success, or null if the session has expired.
+  const refreshSession = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      saveAuth(data.token, data.user);
+      return data.token;
+    } catch {
+      return null;
+    }
+  }, []);
 
   // Update personalization (e.g. preferred name) and sync local state + storage.
   const updateProfile = useCallback(
@@ -183,6 +211,7 @@ export function AuthProvider({ children }) {
     register,
     loginWithGoogle,
     logout,
+    refreshSession,
     updateProfile,
   };
 
