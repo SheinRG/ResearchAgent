@@ -6,7 +6,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
-MAX_CHARS = 4000
+MAX_CHARS = 12000
 
 
 def extract_text(filename: str, content: bytes) -> str:

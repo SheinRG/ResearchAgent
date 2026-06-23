@@ -54,6 +54,31 @@ const useResearchStore = create(
 
       /** Call this after every completed research turn to refresh the sidebar. */
       bumpSessions: () => set({ sessionsNonce: get().sessionsNonce + 1 }),
+
+      // -----------------------------------------------------------------------
+      // Transient: document hand-off across the home → research URL navigation.
+      // NOT persisted (excluded from partialize below).
+      // -----------------------------------------------------------------------
+
+      /**
+       * Documents staged on the home page when the user attaches files.
+       * Consumed once by Effect B in research/page.js, then cleared.
+       * Shape: [{ name: string, text: string }]
+       */
+      pendingDocuments: [],
+
+      /** Stage documents before navigating to /research. */
+      setPendingDocuments: (docs) => set({ pendingDocuments: docs || [] }),
+
+      /**
+       * Read and clear pendingDocuments atomically so a page-reload or a second
+       * Effect B firing never replays the same files.
+       */
+      consumePendingDocuments: () => {
+        const docs = get().pendingDocuments;
+        set({ pendingDocuments: [] });
+        return docs;
+      },
     }),
     {
       name: "research-store",

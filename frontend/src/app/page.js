@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import SearchBar from "@/components/SearchBar";
 import { useAuth } from "@/hooks/useAuth";
+import useResearchStore from "@/stores/researchStore";
 
 // Time-aware openers, framed for someone here to *work* — late hours nudge
 // ("Working late") rather than sign off. Phrased so a ", Name" appends cleanly.
@@ -50,6 +51,7 @@ const ROTATE_MS = 6000;
 export default function HomePage() {
   const router = useRouter();
   const { user, isAuthenticated, isLoading } = useAuth();
+  const setPendingDocuments = useResearchStore((s) => s.setPendingDocuments);
 
   // Greeting depends on the client clock, so resolve after mount to avoid a
   // server/client hydration mismatch.
@@ -123,7 +125,12 @@ export default function HomePage() {
     }
   }, [isAuthenticated, isLoading, router]);
 
-  const handleSearch = (query) => {
+  const handleSearch = (query, documents) => {
+    // If the search comes with file documents, stage them in the store so
+    // Effect B on the research page can pick them up after navigation.
+    if (documents?.length) {
+      setPendingDocuments(documents);
+    }
     router.push(`/research?q=${encodeURIComponent(query)}`);
   };
 

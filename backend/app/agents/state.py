@@ -92,6 +92,10 @@ class ResearchState(TypedDict, total=False):
     sub_queries: list[str]                              # Decomposed sub-questions
     answer_format: dict                                 # Reasoned presentation format {type, reasoning, columns?}
 
+    # --- Uploaded Document Input ---
+    documents: list[dict]                               # [{name, text}] from the request; passed through unchanged
+    document_chunks: list[dict]                         # Chunked doc text produced by researcher (single writer — no reducer needed)
+
     # --- Researcher Output (accumulated across parallel nodes) ---
     search_results: Annotated[list[dict], _merge_lists] # All search results (deduplicated)
     scraped_content: Annotated[list[dict], add]         # All scraped & chunked content

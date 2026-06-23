@@ -210,7 +210,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     handleEvent("done", { session_id: "mock-session-id", total_sources: 3, iterations: 1, confidence: 0.95 });
   }, [handleEvent]);
 
-  const startResearch = useCallback(async (query, maxIterations = 1, token = null, history = [], sessionId = null, onComplete = null, _isRetry = false) => {
+  const startResearch = useCallback(async (query, maxIterations = 1, token = null, history = [], sessionId = null, onComplete = null, documents = [], _isRetry = false) => {
     // Reset state
     setPhase(null);
     setPhaseMessage("");
@@ -258,6 +258,12 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
             query: t.query,
             answer: t.answer || "",
           })),
+          // Uploaded file contents travel as structured documents so the backend
+          // can treat them as first-class context rather than inline query text.
+          documents: (documents || []).map((d) => ({
+            name: d.name || "",
+            text: d.text || "",
+          })),
           ...(sessionId ? { session_id: sessionId } : {}),
         }),
         signal: controller.signal,
@@ -274,7 +280,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
           if (!_isRetry) {
             const newToken = await refreshSession();
             if (newToken) {
-              await startResearch(query, maxIterations, newToken, history, sessionId, onComplete, true);
+              await startResearch(query, maxIterations, newToken, history, sessionId, onComplete, documents, true);
               return;
             }
           }

@@ -85,6 +85,8 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     "user_name": user_name,
                     "iteration": 0,
                     "sub_queries": [],
+                    "documents": [d.model_dump() for d in request.documents],
+                    "document_chunks": [],
                     "search_results": [],
                     "scraped_content": [],
                     "ranked_chunks": [],

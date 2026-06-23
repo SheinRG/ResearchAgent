@@ -175,6 +175,64 @@ async def _serper_search_and_scrape(sub_queries: list[str], settings) -> tuple[l
     return all_search_results, scraped_pages
 
 
+def _build_doc_sources(documents: list[dict]) -> tuple[list[dict], list[dict]]:
+    """
+    Convert uploaded document dicts into pseudo search-results and chunks.
+
+    For each document with non-empty text this produces:
+    - ONE pseudo search-result (to appear in the Sources panel, prepended before
+      web results so the doc gets the first citation slot).
+    - N chunk dicts (same shape as scraped web chunks) so the reranker can treat
+      doc content as first-class evidence.
+
+    Total chunks across ALL documents are capped at 12 to stay within budget.
+
+    Args:
+        documents: List of {name, text} dicts from the request.
+
+    Returns:
+        Tuple of (pseudo_sources, doc_chunks).
+    """
+    MAX_DOC_CHUNKS = 12
+    pseudo_sources: list[dict] = []
+    doc_chunks: list[dict] = []
+
+    settings = get_settings()
+
+    for doc in documents:
+        text = (doc.get("text") or "").strip()
+        if not text:
+            continue
+
+        name = (doc.get("name") or "").strip() or "Uploaded file"
+        file_url = f"file://{name}"
+
+        # One pseudo search-result per doc so it surfaces in the sources panel.
+        pseudo_sources.append({
+            "url": file_url,
+            "title": name,
+            "domain": "Uploaded file",
+            "favicon": "",
+            "snippet": text[:160],
+        })
+
+        # Chunk the doc text; honour the same chunk size/overlap as web content.
+        remaining = MAX_DOC_CHUNKS - len(doc_chunks)
+        if remaining <= 0:
+            break
+
+        chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
+        for chunk_str in chunks[:remaining]:
+            doc_chunks.append({
+                "text": chunk_str,
+                "source_url": file_url,
+                "source_title": name,
+                "source_domain": "Uploaded file",
+            })
+
+    return pseudo_sources, doc_chunks
+
+
 async def researcher_node(state: ResearchState) -> dict:
     """
     Researcher node: runs the full search → read → chunk pipeline for all
@@ -183,23 +241,43 @@ async def researcher_node(state: ResearchState) -> dict:
     Uses Tavily (one search+content call per sub-query) when configured;
     otherwise falls back to Serper search + Trafilatura scraping.
 
+    Uploaded documents (state["documents"]) are converted to pseudo-sources and
+    chunks here and PREPENDED to web results so they occupy the first citation
+    slots ([1], [2]…) in the final answer.
+
     Args:
         state: Current research state with sub_queries.
 
     Returns:
-        Updated state with search_results, scraped_content.
+        Updated state with search_results, scraped_content, document_chunks.
     """
     sub_queries = state.get("sub_queries", [])
     sse_callback = state.get("sse_callback")
     original_query = state.get("query", "")
     settings = get_settings()
 
+    # --- Build document pseudo-sources and chunks (always, even with no web queries) ---
+    doc_pseudo_sources, document_chunks = _build_doc_sources(state.get("documents", []))
+    if document_chunks:
+        logger.info("Researcher: built %d chunks from %d uploaded documents",
+                    len(document_chunks), len(state.get("documents", [])))
+
     if not sub_queries:
         logger.warning("Researcher: no sub-queries to process")
         # Still surface images for the original query so the Images tab can fill
         # even when planning produced no sub-queries.
         images = await _search_and_emit_images(original_query, sse_callback) if original_query else []
-        return {"search_results": [], "scraped_content": [], "images": images}
+
+        # Emit doc pseudo-sources so the Sources panel populates even without web.
+        if sse_callback and doc_pseudo_sources:
+            await sse_callback("sources", {"sources": doc_pseudo_sources})
+
+        return {
+            "search_results": doc_pseudo_sources,
+            "scraped_content": [],
+            "document_chunks": document_chunks,
+            "images": images,
+        }
 
     logger.info("Researcher: processing %d sub-queries", len(sub_queries))
 
@@ -220,20 +298,25 @@ async def researcher_node(state: ResearchState) -> dict:
     # --- Search + read: Tavily (one call) or Serper search + scrape ---
     use_tavily = bool(settings.use_tavily_search and settings.tavily_api_key)
     if use_tavily:
-        all_search_results, scraped_content = await _tavily_search_and_read(sub_queries, settings)
+        web_search_results, scraped_content = await _tavily_search_and_read(sub_queries, settings)
         provider = "tavily"
         # Resilience: if Tavily yields no usable content (e.g. credits exhausted,
         # an outage, or a transient error — all of which surface as empty results),
         # fall back to the Serper search + scrape path so the query still answers.
         if not scraped_content:
             logger.warning("Tavily returned no usable content; falling back to Serper+scrape")
-            all_search_results, scraped_content = await _serper_search_and_scrape(sub_queries, settings)
+            web_search_results, scraped_content = await _serper_search_and_scrape(sub_queries, settings)
             provider = "tavily→serper"
     else:
-        all_search_results, scraped_content = await _serper_search_and_scrape(sub_queries, settings)
+        web_search_results, scraped_content = await _serper_search_and_scrape(sub_queries, settings)
         provider = "serper"
 
-    # Send sources event to frontend
+    # Prepend uploaded-document pseudo-sources so they occupy the first slots in
+    # the sources panel and the citation enrich map — guaranteeing [1], [2]… for
+    # document evidence when the reranker also prepends doc chunks.
+    all_search_results = doc_pseudo_sources + web_search_results
+
+    # Send sources event to frontend (docs appear first in the list)
     if sse_callback and all_search_results:
         await sse_callback("sources", {
             "sources": all_search_results[:15]  # Send top 15 sources
@@ -292,6 +375,7 @@ async def researcher_node(state: ResearchState) -> dict:
     return {
         "search_results": all_search_results,
         "scraped_content": all_chunks,
+        "document_chunks": document_chunks,
         "images": images,
     }
 
@@ -300,30 +384,56 @@ async def rerank_node(state: ResearchState) -> dict:
     """
     Re-rank all accumulated chunks by relevance to the original query.
 
+    Document chunks (from uploaded files) are always PREPENDED to the reranked
+    web chunks with score=1.0 so they occupy the first citation slots ([1], [2]…)
+    and are seen as the primary evidence by the synthesizer.
+
     Args:
-        state: Current state with scraped_content chunks.
+        state: Current state with scraped_content and document_chunks.
 
     Returns:
         Updated state with ranked_chunks and all_sources.
     """
     query = state["query"]
     chunks = state.get("scraped_content", [])
+    document_chunks = state.get("document_chunks", [])
     search_results = state.get("search_results", [])
     settings = get_settings()
 
-    if not chunks:
+    # Need at least one of web chunks or doc chunks to proceed.
+    if not chunks and not document_chunks:
         logger.warning("Reranker: no chunks to rank")
         return {"ranked_chunks": [], "all_sources": search_results}
 
-    logger.info("Reranker: ranking %d chunks for query: %s", len(chunks), query[:80])
+    # Rerank web chunks when present; skip the (expensive) call when there are none.
+    ranked_web: list[dict] = []
+    if chunks:
+        logger.info("Reranker: ranking %d web chunks for query: %s", len(chunks), query[:80])
+        ranked = await rerank_chunks(query, chunks, top_k=settings.rerank_top_k)
+        ranked_web = [r.model_dump() for r in ranked]
+        logger.info("Reranker: top web chunk score=%.3f, bottom=%.3f",
+                    ranked_web[0]["score"] if ranked_web else 0,
+                    ranked_web[-1]["score"] if ranked_web else 0)
+    else:
+        logger.info("Reranker: no web chunks; skipping rerank call")
 
-    ranked = await rerank_chunks(query, chunks, top_k=settings.rerank_top_k)
+    # Give each document chunk score=1.0 (highest possible) and prepend them so
+    # they become sources [1], [2], … in the synthesizer's citation list.
+    ranked_doc: list[dict] = [
+        {
+            "text": c["text"],
+            "score": 1.0,
+            "source_url": c["source_url"],
+            "source_title": c["source_title"],
+            "source_domain": c["source_domain"],
+        }
+        for c in document_chunks
+    ]
 
-    ranked_dicts = [r.model_dump() for r in ranked]
+    if ranked_doc:
+        logger.info("Reranker: prepending %d document chunks (score=1.0)", len(ranked_doc))
 
-    logger.info("Reranker: top chunk score=%.3f, bottom=%.3f",
-                ranked_dicts[0]["score"] if ranked_dicts else 0,
-                ranked_dicts[-1]["score"] if ranked_dicts else 0)
+    ranked_dicts = ranked_doc + ranked_web
 
     return {
         "ranked_chunks": ranked_dicts,

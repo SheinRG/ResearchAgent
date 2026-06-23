@@ -31,7 +31,7 @@ function ResearchContent() {
     startResearch,
   } = useResearch();
 
-  const { addRecentSearch, bumpSessions } = useResearchStore();
+  const { addRecentSearch, bumpSessions, consumePendingDocuments } = useResearchStore();
 
   // The conversation thread: completed turns, plus the one currently streaming.
   const [turns, setTurns] = useState([]);
@@ -51,11 +51,14 @@ function ResearchContent() {
    *               fetching when searchParams identity changes without the
    *               value changing, e.g. on HMR).
    * liveRef     — DOM wrapper for the currently-streaming turn (auto-scroll).
+   * activeDocsRef — documents for the currently-active run; re-used by retry
+   *               so the same files are re-sent without re-uploading.
    */
   const seedRef          = useRef(null);
   const sessionIdRef     = useRef(null);
   const loadedSessionRef = useRef(null);
   const liveRef          = useRef(null);
+  const activeDocsRef    = useRef([]);
 
   // Only redirect to login when trying to run a new query without auth.
   // Shared session links (?session=) are public and work without login.
@@ -161,22 +164,28 @@ function ResearchContent() {
     setSessionError(null);
     setActiveQuery(urlQuery);
     addRecentSearch(urlQuery);
-    startResearch(urlQuery, 1, token, [], null, handleComplete);
-  }, [urlQuery, sessionId, token, startResearch, addRecentSearch, handleComplete]);
+    // Consume any documents staged by the home page before navigating here.
+    // consumePendingDocuments clears the store so a refresh doesn't replay them.
+    const pendingDocs = consumePendingDocuments();
+    activeDocsRef.current = pendingDocs;
+    startResearch(urlQuery, 1, token, [], null, handleComplete, pendingDocs);
+  }, [urlQuery, sessionId, token, startResearch, addRecentSearch, handleComplete, consumePendingDocuments]);
 
   // ---------------------------------------------------------------------------
   // submitQuery — follow-up within the current thread
   // ---------------------------------------------------------------------------
   const submitQuery = useCallback(
-    (q) => {
+    (q, documents) => {
       const trimmed = (q || "").trim();
       if (!trimmed || isStreaming || activeQuery || !token) return;
       const history = turns.map((t) => ({ query: t.query, answer: t.answer }));
+      const docs = documents || [];
       addRecentSearch(trimmed);
       setActiveQuery(trimmed);
+      activeDocsRef.current = docs;
       // sessionIdRef.current is already set (either from a live run or from the
       // restored thread), so this follow-up correctly continues the same thread.
-      startResearch(trimmed, 1, token, history, sessionIdRef.current, handleComplete);
+      startResearch(trimmed, 1, token, history, sessionIdRef.current, handleComplete, docs);
     },
     [turns, isStreaming, activeQuery, token, startResearch, addRecentSearch, handleComplete]
   );
@@ -191,7 +200,9 @@ function ResearchContent() {
   const retry = useCallback(() => {
     if (!activeQuery) return;
     const history = turns.map((t) => ({ query: t.query, answer: t.answer }));
-    startResearch(activeQuery, 1, token, history, sessionIdRef.current, handleComplete);
+    // Re-send the same documents that were part of the failed run so the retry
+    // is semantically identical to the original request.
+    startResearch(activeQuery, 1, token, history, sessionIdRef.current, handleComplete, activeDocsRef.current);
   }, [activeQuery, turns, token, startResearch, handleComplete]);
 
   const showSkeleton = isStreaming && !answer && sources.length === 0;

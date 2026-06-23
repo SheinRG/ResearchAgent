@@ -135,6 +135,15 @@ async def router_node(state: ResearchState) -> dict:
         logger.warning("Triage failed, defaulting to research: %s", e)
         sub_queries = [query]
 
+    # When the user uploaded documents, force the full research pipeline so the
+    # cited synthesizer path runs — even for queries triage would call "chat".
+    # Sub-queries are still generated above so web results can supplement the docs.
+    if state.get("documents") and mode == "chat":
+        logger.info("Triage: overriding mode chat→research because documents are present")
+        mode = "research"
+        if not sub_queries:
+            sub_queries = _clean_sub_queries(None, query)
+
     logger.info(
         "Triage: mode=%s, %d sub-queries, format=%s for: %s",
         mode, len(sub_queries), answer_format.get("type"), query[:80],

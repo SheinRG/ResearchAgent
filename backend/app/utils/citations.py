@@ -74,7 +74,12 @@ def build_cited_context(
         enriched = enrich.get(url, {})
         domain = enriched.get("domain") or sample.get("source_domain") or urlparse(url).netloc.replace("www.", "")
         title = enriched.get("title") or sample.get("source_title") or domain
-        favicon = enriched.get("favicon") or f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
+        # Uploaded-file sources use a file:// URL; Google's favicon service would
+        # 404 on domain "Uploaded file", so leave their favicon blank instead.
+        if url.startswith("file://"):
+            favicon = enriched.get("favicon") or ""
+        else:
+            favicon = enriched.get("favicon") or f"https://www.google.com/s2/favicons?domain={domain}&sz=32"
         snippet = enriched.get("snippet") or (chunks_by_url[url][0][:200] if chunks_by_url[url] else "")
 
         cited_sources.append({

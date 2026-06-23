@@ -64,6 +64,19 @@ class ProfileUpdateRequest(BaseModel):
 
 # --- Research Schemas ---
 
+class DocumentInput(BaseModel):
+    """A single uploaded document supplied alongside a research query."""
+    name: str = Field(default="", max_length=255, description="File name (used as source title)")
+    text: str = Field(default="", max_length=16000, description="Extracted plain text of the document")
+
+    @field_validator("name", "text")
+    @classmethod
+    def clean_control_chars(cls, v: str) -> str:
+        """Strip control characters (except newline/tab) so content is safe to drop into prompts."""
+        v = (v or "").strip()
+        return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", v)
+
+
 class HistoryTurn(BaseModel):
     """A prior question/answer exchange, supplied for follow-up context."""
     query: str = Field(..., max_length=2000, description="The question asked in that turn")
@@ -79,6 +92,11 @@ class ResearchRequest(BaseModel):
         default_factory=list,
         max_length=20,
         description="Prior conversation turns for follow-up context",
+    )
+    documents: list[DocumentInput] = Field(
+        default_factory=list,
+        max_length=5,
+        description="Uploaded document texts to answer from",
     )
 
 

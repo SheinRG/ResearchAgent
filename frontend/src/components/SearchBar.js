@@ -26,8 +26,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
  * chips rendered by the page); `mode="compact"` is the single-row sticky
  * follow-up bar. When `withTools` is set it shows the attach + dictate
  * affordances from the design. File attachments are uploaded at submit time:
- * text is extracted server-side and appended to the query as context.
- * Dictation uses the Web Speech API when available.
+ * extracted text is sent to the backend as a separate `documents` field (not
+ * appended to the query string). Dictation uses the Web Speech API when available.
  */
 export default function SearchBar({
   onSearch,
@@ -79,7 +79,7 @@ export default function SearchBar({
     if (!trimmed || isDisabled) return;
 
     if (attachments.length === 0) {
-      onSearch(trimmed);
+      onSearch(trimmed, []);
       if (clearOnSubmit) {
         setQuery("");
         setAttachments([]);
@@ -87,9 +87,10 @@ export default function SearchBar({
       return;
     }
 
-    // Upload all attachments and collect extracted text
+    // Upload all attachments and collect extracted text as structured documents.
+    // The full returned text is forwarded — the backend decides how much to use.
     setUploading(true);
-    let enrichedQuery = trimmed;
+    const documents = [];
 
     try {
       for (const attachment of attachments) {
@@ -112,9 +113,7 @@ export default function SearchBar({
           }
 
           const data = await res.json();
-          enrichedQuery +=
-            `\n\n[Context from ${attachment.name}]\n` +
-            data.text.slice(0, 2000);
+          documents.push({ name: attachment.name, text: data.text });
         } catch {
           showToast(`Could not upload ${attachment.name} — skipping`);
         }
@@ -123,7 +122,9 @@ export default function SearchBar({
       setUploading(false);
     }
 
-    onSearch(enrichedQuery);
+    // Pass query as-is; documents travel as a separate argument so the backend
+    // can handle them independently rather than as inline query context.
+    onSearch(trimmed, documents);
     if (clearOnSubmit) {
       setQuery("");
       setAttachments([]);
