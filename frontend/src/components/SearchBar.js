@@ -117,8 +117,9 @@ export default function SearchBar({
             name: attachment.name,
             text: data.text,
             file: attachment.file,
-            mime: attachment.file?.type || "",
-            size: attachment.file?.size || 0,
+            file_id: data.file_id || "",
+            mime: data.mime || attachment.file?.type || "",
+            size: data.size || attachment.file?.size || 0,
           });
         } catch {
           showToast(`Could not upload ${attachment.name} — skipping`);

@@ -132,6 +132,12 @@ function ResearchContent() {
           sources:   t.sources   || [],
           images:    [],           // stored turns have no images; Images tab will be empty
           followUps: t.follow_up_suggestions || [],
+          documents: (t.documents || []).map((d) => ({
+            name: d.name || d.filename || "",
+            file_id: d.file_id || "",
+            mime: d.mime || "",
+            size: d.size || 0,
+          })),
           doneData: {
             session_id:   data.id,
             total_sources: (t.sources || []).length,

@@ -4,13 +4,16 @@ import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { FileTextIcon, DownloadIcon, CloseIcon } from "@/components/Icons";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 /**
- * Slide-in document viewer panel. Renders a PDF in an iframe (with native
- * browser controls) or falls back to the extracted plain text. Closes on
- * backdrop click or Escape key.
+ * Slide-in document viewer panel. Renders a PDF or text file in an iframe
+ * (with native browser controls), falls back to extracted plain text, or
+ * offers a download link for unsupported types. Works for both live-session
+ * files (browser File object) and restored sessions (served via file_id).
  *
  * Props:
- *   document – { name, text, file, mime, size } | null
+ *   document – { name, text, file, file_id, mime, size } | null
  *   onClose  – () => void
  */
 export default function DocumentViewer({ document, onClose }) {
@@ -21,16 +24,21 @@ export default function DocumentViewer({ document, onClose }) {
     ((document.mime || "").includes("pdf") ||
       /\.pdf$/i.test(document.name || ""));
 
-  // Create / revoke an object URL for the raw File so the iframe can load it.
+  const isTextLike =
+    document &&
+    (/\.(txt|md)$/i.test(document.name || "") ||
+      (document.mime || "").startsWith("text/"));
+
+  // Create / revoke an object URL for any raw File (live session).
   useEffect(() => {
-    if (!document?.file || !isPdf) return;
+    if (!document?.file) return;
     const url = URL.createObjectURL(document.file);
     setObjectUrl(url);
     return () => {
       URL.revokeObjectURL(url);
       setObjectUrl(null);
     };
-  }, [document, isPdf]);
+  }, [document]);
 
   // Close on Escape.
   useEffect(() => {
@@ -44,31 +52,13 @@ export default function DocumentViewer({ document, onClose }) {
 
   if (!document) return null;
 
-  // ---- Download handler ------------------------------------------------
-  const handleDownload = () => {
-    try {
-      if (document.file) {
-        // Use the already-created objectUrl for PDFs, or create a fresh one.
-        const url = objectUrl || URL.createObjectURL(document.file);
-        const a = window.document.createElement("a");
-        a.href = url;
-        a.download = document.name;
-        a.click();
-        // If we created a fresh url (non-PDF), revoke after a tick.
-        if (!objectUrl) setTimeout(() => URL.revokeObjectURL(url), 1000);
-      } else if (document.text) {
-        const blob = new Blob([document.text], { type: "text/plain" });
-        const url = URL.createObjectURL(blob);
-        const a = window.document.createElement("a");
-        a.href = url;
-        a.download = `${document.name}.txt`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      }
-    } catch {
-      /* ignore download errors */
-    }
-  };
+  // Remote URL available when the file was persisted server-side.
+  const remoteUrl = document.file_id
+    ? `${API_BASE}/api/files/${document.file_id}`
+    : null;
+
+  // Prefer the local object URL (live session); fall back to the server URL.
+  const fileUrl = objectUrl || remoteUrl;
 
   // ---- Size formatting -------------------------------------------------
   const sizeLabel =
@@ -80,6 +70,86 @@ export default function DocumentViewer({ document, onClose }) {
   const paragraphs = document.text
     ? document.text.split(/\n{2,}/).filter(Boolean)
     : [];
+
+  // ---- Body rendering --------------------------------------------------
+  let body;
+  if ((isPdf || isTextLike) && fileUrl) {
+    body = (
+      <iframe
+        className="doc-viewer-frame"
+        src={fileUrl}
+        title={document.name}
+      />
+    );
+  } else if (paragraphs.length > 0) {
+    body = (
+      <article className="doc-viewer-text">
+        {paragraphs.map((para, i) => (
+          <p key={i}>{para}</p>
+        ))}
+      </article>
+    );
+  } else if (fileUrl) {
+    body = (
+      <article className="doc-viewer-text">
+        <p style={{ color: "var(--text-tertiary)", fontStyle: "italic" }}>
+          Preview isn&apos;t available for this file type.
+        </p>
+        <p style={{ marginTop: "0.75rem" }}>
+          <a
+            href={fileUrl}
+            download={document.name}
+            style={{ color: "var(--accent)", textDecoration: "underline" }}
+          >
+            Download {document.name}
+          </a>
+        </p>
+      </article>
+    );
+  } else {
+    body = (
+      <article className="doc-viewer-text">
+        <p style={{ color: "var(--text-tertiary)", fontStyle: "italic" }}>
+          No preview available for this file.
+        </p>
+      </article>
+    );
+  }
+
+  // ---- Download button -------------------------------------------------
+  const downloadBtn = document.file ? (
+    // Live session: use the blob object URL (already created above).
+    <a
+      role="button"
+      className="doc-viewer-btn"
+      onClick={() => {
+        try {
+          const url = objectUrl || URL.createObjectURL(document.file);
+          const a = window.document.createElement("a");
+          a.href = url;
+          a.download = document.name;
+          a.click();
+          if (!objectUrl) setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch { /* ignore */ }
+      }}
+      title="Download"
+      aria-label="Download file"
+      style={{ cursor: "pointer" }}
+    >
+      <DownloadIcon width={15} height={15} />
+    </a>
+  ) : remoteUrl ? (
+    // Restored session: real anchor so the browser handles the download.
+    <a
+      href={remoteUrl}
+      download={document.name}
+      className="doc-viewer-btn"
+      title="Download"
+      aria-label="Download file"
+    >
+      <DownloadIcon width={15} height={15} />
+    </a>
+  ) : null;
 
   return (
     <>
@@ -105,16 +175,7 @@ export default function DocumentViewer({ document, onClose }) {
             )}
           </div>
           <div className="doc-viewer-actions">
-            <a
-              role="button"
-              className="doc-viewer-btn"
-              onClick={handleDownload}
-              title="Download"
-              aria-label="Download file"
-              style={{ cursor: "pointer" }}
-            >
-              <DownloadIcon width={15} height={15} />
-            </a>
+            {downloadBtn}
             <button
               type="button"
               className="doc-viewer-btn"
@@ -129,25 +190,7 @@ export default function DocumentViewer({ document, onClose }) {
 
         {/* Body */}
         <div className="doc-viewer-body">
-          {isPdf && objectUrl ? (
-            <iframe
-              className="doc-viewer-frame"
-              src={objectUrl}
-              title={document.name}
-            />
-          ) : paragraphs.length > 0 ? (
-            <article className="doc-viewer-text">
-              {paragraphs.map((para, i) => (
-                <p key={i}>{para}</p>
-              ))}
-            </article>
-          ) : (
-            <article className="doc-viewer-text">
-              <p style={{ color: "var(--text-tertiary)", fontStyle: "italic" }}>
-                No preview available for this file.
-              </p>
-            </article>
-          )}
+          {body}
         </div>
       </motion.aside>
     </>

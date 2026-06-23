@@ -68,6 +68,9 @@ class DocumentInput(BaseModel):
     """A single uploaded document supplied alongside a research query."""
     name: str = Field(default="", max_length=255, description="File name (used as source title)")
     text: str = Field(default="", max_length=16000, description="Extracted plain text of the document")
+    file_id: str = Field(default="", max_length=64, description="Server-side id of the stored original file")
+    mime: str = Field(default="", max_length=128, description="MIME type of the uploaded file")
+    size: int = Field(default=0, ge=0, description="Byte size of the uploaded file")
 
     @field_validator("name", "text")
     @classmethod
@@ -221,6 +224,7 @@ class SessionTurn(BaseModel):
     confidence: float = 0.0
     iterations: int = 1
     follow_up_suggestions: list[str] = Field(default_factory=list)
+    documents: list = Field(default_factory=list)   # raw dicts: name/file_id/mime/size
     created_at: str
 
 

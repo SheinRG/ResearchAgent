@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["research"])
 
 
-async def _save_session(session_id: str, query: str, final_state: dict, user_id: str = "") -> None:
+async def _save_session(session_id: str, query: str, final_state: dict, user_id: str = "", documents: list | None = None) -> None:
     try:
         factory = get_session_factory()
         async with factory() as db:
@@ -42,6 +42,7 @@ async def _save_session(session_id: str, query: str, final_state: dict, user_id:
                 confidence=final_state.get("confidence", 0.0),
                 iterations=final_state.get("iteration", 1),
                 follow_up_suggestions=final_state.get("follow_up_suggestions", []),
+                documents=documents or [],
             )
             db.add(research_query)
             await db.commit()
@@ -136,6 +137,11 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                             query=request.query,
                             final_state=final,
                             user_id=user_id,
+                            documents=[
+                                {"name": d.name, "file_id": d.file_id, "mime": d.mime, "size": d.size}
+                                for d in request.documents
+                                if d.file_id
+                            ],
                         )
                     except Exception as e:
                         logger.error("Failed to save session: %s", e)

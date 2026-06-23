@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from sqlalchemy import Column, String, Text, Float, Integer, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, String, Text, Float, Integer, DateTime, ForeignKey, JSON, LargeBinary
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -67,6 +67,7 @@ class ResearchQuery(Base):
     confidence = Column(Float, default=0.0)
     iterations = Column(Integer, default=1)
     follow_up_suggestions = Column(JSON, default=list)
+    documents = Column(JSON, default=list)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     session = relationship("ResearchSession", back_populates="queries")
@@ -83,6 +84,20 @@ class Note(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     user = relationship("User", back_populates="notes")
+
+
+class UploadedFile(Base):
+    """Raw bytes of an uploaded file, kept so the document viewer can re-render
+    it on restored sessions (the browser's in-memory File is gone after reload)."""
+    __tablename__ = "uploaded_files"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    filename = Column(String, default="")
+    mime = Column(String, default="")
+    size = Column(Integer, default=0)
+    content = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 # --- Database Engine & Session Factory ---
@@ -157,6 +172,9 @@ async def init_db() -> None:
             from sqlalchemy import text
             await conn.execute(
                 text("ALTER TABLE users ADD COLUMN IF NOT EXISTS preferred_name VARCHAR DEFAULT ''")
+            )
+            await conn.execute(
+                text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS documents JSON")
             )
         logger.info("Database tables created successfully")
     except Exception as e:

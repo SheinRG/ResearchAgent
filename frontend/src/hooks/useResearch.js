@@ -263,6 +263,9 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
           documents: (documents || []).map((d) => ({
             name: d.name || "",
             text: d.text || "",
+            file_id: d.file_id || "",
+            mime: d.mime || "",
+            size: d.size || 0,
           })),
           ...(sessionId ? { session_id: sessionId } : {}),
         }),
