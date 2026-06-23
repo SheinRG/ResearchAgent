@@ -98,6 +98,9 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     "follow_up_suggestions": [],
                     "phase": "starting",
                     "error": "",
+                    # Router overwrites this; default True so a no-doc run is
+                    # never accidentally blocked from searching the web.
+                    "needs_web": True,
                     "sse_callback": queue_callback,
                 }
                 accumulated: dict = {}

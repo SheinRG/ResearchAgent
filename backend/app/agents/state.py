@@ -85,8 +85,11 @@ class ResearchState(TypedDict, total=False):
     history: list[dict]                                 # Prior {query, answer} turns for follow-up context
     user_name: str                                      # What the user wants the agent to call them ("" = none)
 
-    # --- Router Output ---
+    # --- Router / Planner Output ---
     mode: str                                           # "chat" (direct reply) or "research" (full pipeline)
+    # When documents are attached, whether to also run web search to augment them.
+    # False = answer from the uploaded doc(s) only; True = also hit the web.
+    needs_web: bool
 
     # --- Planner Output ---
     sub_queries: list[str]                              # Decomposed sub-questions

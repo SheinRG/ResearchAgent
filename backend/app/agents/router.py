@@ -38,11 +38,17 @@ STEP 2 — ONLY when mode is "research", plan the research:
 
 For "chat" mode, set "sub_queries" to [] and "answer_format" to {{"type": "prose", "reasoning": "", "columns": []}}.
 
-Respond ONLY with valid JSON in this exact format:
-{{"mode": "chat|research", "sub_queries": ["sub-query 1", "sub-query 2"], "answer_format": {{"type": "table|list|steps|prose", "reasoning": "one short clause", "columns": ["Col A", "Col B"]}}}}
-Note: "columns" is REQUIRED only when type is "table" (2-6 short header strings tailored to the query); use [] otherwise."""
+STEP 3 — needs_web (ONLY applies when documents are attached):
+If a document has been attached to this message, decide whether web augmentation is actually needed:
+- Set "needs_web": false when the user's question is about, or answerable from, the attached document(s) alone — e.g. "what is this about", "summarize this", "explain section 3", "what does it say about X", extract/Q&A about the document content. This is the DEFAULT when a document is present.
+- Set "needs_web": true ONLY when answering well genuinely requires external or current information BEYOND what the document contains — e.g. comparing the document to outside data, fetching latest news/prices, or facts clearly absent from the document.
+When NO documents are attached, omit "needs_web" or set it false — it is ignored downstream.
 
-TRIAGE_PROMPT = """{conversation}Latest user message: {query}
+Respond ONLY with valid JSON in this exact format:
+{{"mode": "chat|research", "sub_queries": ["sub-query 1", "sub-query 2"], "answer_format": {{"type": "table|list|steps|prose", "reasoning": "one short clause", "columns": ["Col A", "Col B"]}}, "needs_web": true|false}}
+Note: "columns" is REQUIRED only when type is "table" (2-6 short header strings tailored to the query); use [] otherwise. "needs_web" is only meaningful when documents are attached; it can be omitted or false otherwise."""
+
+TRIAGE_PROMPT = """{conversation}{documents_note}Latest user message: {query}
 
 Respond with JSON only:"""
 
@@ -101,6 +107,10 @@ async def router_node(state: ResearchState) -> dict:
     history = state.get("history", [])
     sse_callback = state.get("sse_callback")
 
+    # Determine whether documents are attached so we can inject the right context
+    # into the triage prompt and apply the correct needs_web default.
+    has_documents = bool(state.get("documents"))
+
     conversation = ""
     history_text = format_history(history)
     if history_text:
@@ -111,14 +121,27 @@ async def router_node(state: ResearchState) -> dict:
             f"Conversation so far:\n{history_text}\n\n"
         )
 
+    # Inject a note about attached documents so the LLM can judge needs_web.
+    documents_note = (
+        "The user has ATTACHED one or more documents to this message.\n\n"
+        if has_documents else ""
+    )
+
     mode = "research"
     sub_queries: list[str] = []
     answer_format = dict(_DEFAULT_FORMAT)
+    # Default: when docs are present, skip web unless triage explicitly enables it;
+    # when no docs, web always runs (needs_web=True is irrelevant but harmless).
+    needs_web: bool = not has_documents
 
     try:
         llm = get_llm_client()
         result = await llm.generate_structured(
-            prompt=TRIAGE_PROMPT.format(conversation=conversation, query=query),
+            prompt=TRIAGE_PROMPT.format(
+                conversation=conversation,
+                documents_note=documents_note,
+                query=query,
+            ),
             system=TRIAGE_SYSTEM.format(current_year=date.today().year),
             temperature=0.2,
         )
@@ -130,23 +153,34 @@ async def router_node(state: ResearchState) -> dict:
         if mode == "research":
             sub_queries = _clean_sub_queries(result.get("sub_queries"), query)
             answer_format = _clean_format(result.get("answer_format"))
+
+        # Only read needs_web from triage when documents are actually attached;
+        # default False (doc-only) so the LLM must opt in to web augmentation.
+        if has_documents:
+            needs_web = bool(result.get("needs_web", False))
+
     except Exception as e:
         # Fail safe: on any error, fall back to researching the original query.
+        # When docs are present, stay doc-only (needs_web=False) so we don't
+        # accidentally web-search a doc-referential question.
         logger.warning("Triage failed, defaulting to research: %s", e)
         sub_queries = [query]
+        needs_web = not has_documents  # keep safe default
 
     # When the user uploaded documents, force the full research pipeline so the
     # cited synthesizer path runs — even for queries triage would call "chat".
-    # Sub-queries are still generated above so web results can supplement the docs.
-    if state.get("documents") and mode == "chat":
+    # Sub-queries are still generated above so web results can supplement when needed.
+    if has_documents and mode == "chat":
         logger.info("Triage: overriding mode chat→research because documents are present")
         mode = "research"
         if not sub_queries:
             sub_queries = _clean_sub_queries(None, query)
 
     logger.info(
-        "Triage: mode=%s, %d sub-queries, format=%s for: %s",
-        mode, len(sub_queries), answer_format.get("type"), query[:80],
+        "Triage: mode=%s, %d sub-queries, format=%s%s for: %s",
+        mode, len(sub_queries), answer_format.get("type"),
+        f", needs_web={needs_web}" if has_documents else "",
+        query[:80],
     )
 
     # Surface planning progress + sub-queries to the UI for research runs only;
@@ -162,4 +196,5 @@ async def router_node(state: ResearchState) -> dict:
         "mode": mode,
         "sub_queries": sub_queries,
         "answer_format": answer_format,
+        "needs_web": needs_web,
     }

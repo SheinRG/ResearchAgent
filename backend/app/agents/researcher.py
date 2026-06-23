@@ -256,17 +256,26 @@ async def researcher_node(state: ResearchState) -> dict:
     original_query = state.get("query", "")
     settings = get_settings()
 
-    # --- Build document pseudo-sources and chunks (always, even with no web queries) ---
-    doc_pseudo_sources, document_chunks = _build_doc_sources(state.get("documents", []))
+    # Whether to hit the web at all this turn.
+    # needs_web=True  → web search + images run as normal.
+    # needs_web=False → document-only answer; skip all network I/O for web/images.
+    documents = state.get("documents", [])
+    needs_web: bool = state.get("needs_web", True)
+    run_web = (not documents) or needs_web
+
+    # --- Build document pseudo-sources and chunks (always, regardless of web flag) ---
+    doc_pseudo_sources, document_chunks = _build_doc_sources(documents)
     if document_chunks:
         logger.info("Researcher: built %d chunks from %d uploaded documents",
-                    len(document_chunks), len(state.get("documents", [])))
+                    len(document_chunks), len(documents))
 
     if not sub_queries:
         logger.warning("Researcher: no sub-queries to process")
-        # Still surface images for the original query so the Images tab can fill
-        # even when planning produced no sub-queries.
-        images = await _search_and_emit_images(original_query, sse_callback) if original_query else []
+        # Surface images only when we're allowed to touch the web.
+        images = (
+            await _search_and_emit_images(original_query, sse_callback)
+            if original_query and run_web else []
+        )
 
         # Emit doc pseudo-sources so the Sources panel populates even without web.
         if sse_callback and doc_pseudo_sources:
@@ -279,7 +288,38 @@ async def researcher_node(state: ResearchState) -> dict:
             "images": images,
         }
 
-    logger.info("Researcher: processing %d sub-queries", len(sub_queries))
+    logger.info(
+        "Researcher: processing %d sub-queries (run_web=%s)",
+        len(sub_queries), run_web,
+    )
+
+    # -------------------------------------------------------------------------
+    # DOC-ONLY PATH — triage decided web augmentation is not needed.
+    # Skip all web search / scrape / image calls; serve from the document alone.
+    # -------------------------------------------------------------------------
+    if not run_web:
+        logger.info("Researcher: skipping web search and images (document-only mode)")
+
+        if sse_callback:
+            await sse_callback("phase", {
+                "phase": "reading",
+                "message": "Reading your document...",
+            })
+
+        # Surface the document(s) as the only sources.
+        if sse_callback and doc_pseudo_sources:
+            await sse_callback("sources", {"sources": doc_pseudo_sources})
+
+        return {
+            "search_results": doc_pseudo_sources,
+            "scraped_content": [],           # no web chunks; reranker gets doc chunks only
+            "document_chunks": document_chunks,
+            "images": [],                    # images are noise for doc-referential questions
+        }
+
+    # -------------------------------------------------------------------------
+    # WEB PATH — normal behaviour (unchanged).
+    # -------------------------------------------------------------------------
 
     # Phase: Searching
     if sse_callback:
