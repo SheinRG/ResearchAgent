@@ -1,0 +1,1 @@
+- Add devlog to track daily notes
