@@ -5,3 +5,4 @@
 - Note file-viewer panel feature shipped
 - List ideas for future search tuning
 - Record triage/researcher/synthesizer graph shape
+- Add note on uploaded-files-as-sources behavior
