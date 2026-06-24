@@ -9,3 +9,4 @@
 - Jot down welcome-screen copy idea
 - Wrap up today's devlog entries
 - Devlog entry 11
+- Devlog entry 12
