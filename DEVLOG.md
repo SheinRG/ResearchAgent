@@ -29,3 +29,4 @@
 - Devlog entry 29
 - Devlog entry 30
 - Devlog entry 31
+- Devlog entry 32
