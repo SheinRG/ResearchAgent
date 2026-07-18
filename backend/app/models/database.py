@@ -86,6 +86,18 @@ class Note(Base):
     user = relationship("User", back_populates="notes")
 
 
+class RefreshToken(Base):
+    """Server-side record of a refresh token (stored as a SHA-256 hash, never
+    plaintext). DB-backed rather than Redis so sessions survive cache restarts —
+    losing these rows silently logs every user out."""
+    __tablename__ = "refresh_tokens"
+
+    token_hash = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
 class UploadedFile(Base):
     """Raw bytes of an uploaded file, kept so the document viewer can re-render
     it on restored sessions (the browser's in-memory File is gone after reload)."""

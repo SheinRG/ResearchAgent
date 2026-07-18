@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, createContext, useContext, useCallback } from "react";
+import { useState, useEffect, useRef, createContext, useContext, useCallback } from "react";
 import { useRouter } from "next/navigation";
 
 const AuthContext = createContext(null);
@@ -21,22 +21,9 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
-
-  // Load from localStorage on mount
-  useEffect(() => {
-    const storedToken = localStorage.getItem("auth_token");
-    const storedUser = localStorage.getItem("auth_user");
-    
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch (e) {
-        console.error("Failed to parse user from local storage", e);
-      }
-    }
-    setIsLoading(false);
-  }, []);
+  // React 18 StrictMode mounts effects twice in dev; the bootstrap must run
+  // once or the second pass could rotate/invalidate the session mid-flight.
+  const bootstrappedRef = useRef(false);
 
   const saveAuth = (newToken, newUser) => {
     setToken(newToken);
@@ -54,12 +41,14 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const clearAuth = useCallback(() => {
+  const clearAuth = useCallback(({ redirect = true } = {}) => {
     setToken(null);
     setUser(null);
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_user");
-    router.push("/login");
+    // The session bootstrap clears without redirecting so public pages (shared
+    // ?session= links) stay viewable; each guarded page routes to /login itself.
+    if (redirect) router.push("/login");
   }, [router]);
 
   const login = async (email, password) => {
@@ -189,6 +178,61 @@ export function AuthProvider({ children }) {
       return null;
     }
   }, []);
+
+  // Session bootstrap: restore from localStorage on mount, but *validate* the
+  // stored token against the backend before treating the user as signed in.
+  // Previously the token was trusted blindly, so an expired token showed the
+  // dashboard and then bounced the user to /login on their first query.
+  useEffect(() => {
+    if (bootstrappedRef.current) return;
+    bootstrappedRef.current = true;
+
+    const storedToken = localStorage.getItem("auth_token");
+    const storedUser = localStorage.getItem("auth_user");
+    if (!storedToken || !storedUser) {
+      setIsLoading(false);
+      return;
+    }
+
+    let parsedUser = null;
+    try {
+      parsedUser = JSON.parse(storedUser);
+    } catch (e) {
+      console.error("Failed to parse user from local storage", e);
+    }
+
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${storedToken}` },
+        });
+        if (res.ok) {
+          const fresh = await res.json();
+          const merged = { ...(parsedUser || {}), ...fresh };
+          setToken(storedToken);
+          setUser(merged);
+          localStorage.setItem("auth_user", JSON.stringify(merged));
+        } else if (res.status === 401) {
+          // Access token expired/invalid — silently exchange the refresh
+          // cookie for a new one. Only a dead refresh token ends the session.
+          const newToken = await refreshSession();
+          if (!newToken) clearAuth({ redirect: false });
+        } else {
+          // Server hiccup (5xx etc.) — keep the session optimistically; the
+          // per-request 401 handling will sort it out once the API recovers.
+          setToken(storedToken);
+          if (parsedUser) setUser(parsedUser);
+        }
+      } catch {
+        // Backend unreachable (offline / dev without docker) — keep the stored
+        // session so the UI remains usable; requests will retry when it's back.
+        setToken(storedToken);
+        if (parsedUser) setUser(parsedUser);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
+  }, [refreshSession, clearAuth]);
 
   // Update personalization (e.g. preferred name) and sync local state + storage.
   const updateProfile = useCallback(

@@ -73,12 +73,13 @@ def validate_token(token: str) -> Optional[dict]:
         return None
 
 
-_REFRESH_PREFIX = "refresh:"
+def _hash_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _refresh_key(token: str) -> str:
-    h = hashlib.sha256(token.encode()).hexdigest()
-    return f"{_REFRESH_PREFIX}{h}"
+def _utcnow() -> datetime:
+    # Naive UTC, matching the DateTime columns in models/database.py.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def create_refresh_token() -> str:
@@ -86,43 +87,61 @@ def create_refresh_token() -> str:
 
 
 async def store_refresh_token(user_id: str, token: str, expiry_seconds: int) -> None:
-    from app.services.cache import get_redis
-    redis = await get_redis()
-    if redis is None:
-        logger.warning("Redis unavailable — refresh token not persisted; user will need to re-login when access token expires")
-        return
-    await redis.set(_refresh_key(token), user_id, ex=expiry_seconds)
+    from app.models.database import RefreshToken, get_session_factory
+
+    factory = get_session_factory()
+    async with factory() as db:
+        db.add(
+            RefreshToken(
+                token_hash=_hash_refresh_token(token),
+                user_id=user_id,
+                expires_at=_utcnow() + timedelta(seconds=expiry_seconds),
+            )
+        )
+        await db.commit()
 
 
 async def validate_and_rotate_refresh_token(token: str) -> Optional[tuple[str, str]]:
     """
-    Look up token in Redis, delete it, issue a new one (rotation).
-    Returns (user_id, new_token) or None if token is invalid/expired/Redis down.
+    Look up the token, delete it, issue a new one (rotation).
+    Returns (user_id, new_token) or None if the token is unknown or expired.
     Rotation means a stolen token is detected the next time the legitimate user refreshes.
     """
-    from app.services.cache import get_redis
-    redis = await get_redis()
-    if redis is None:
-        return None
-    key = _refresh_key(token)
-    user_id = await redis.get(key)
-    if not user_id:
-        return None
-    settings = get_settings()
-    new_token = create_refresh_token()
-    pipe = redis.pipeline()
-    pipe.delete(key)
-    pipe.set(_refresh_key(new_token), user_id, ex=settings.refresh_token_expiry_days * 86400)
-    await pipe.execute()
-    return user_id, new_token
+    from app.models.database import RefreshToken, get_session_factory
+
+    factory = get_session_factory()
+    async with factory() as db:
+        row = await db.get(RefreshToken, _hash_refresh_token(token))
+        if row is None:
+            return None
+        if row.expires_at <= _utcnow():
+            await db.delete(row)
+            await db.commit()
+            return None
+        user_id = row.user_id
+        settings = get_settings()
+        new_token = create_refresh_token()
+        await db.delete(row)
+        db.add(
+            RefreshToken(
+                token_hash=_hash_refresh_token(new_token),
+                user_id=user_id,
+                expires_at=_utcnow() + timedelta(days=settings.refresh_token_expiry_days),
+            )
+        )
+        await db.commit()
+        return user_id, new_token
 
 
 async def revoke_refresh_token(token: str) -> None:
-    from app.services.cache import get_redis
-    redis = await get_redis()
-    if redis is None:
-        return
-    await redis.delete(_refresh_key(token))
+    from app.models.database import RefreshToken, get_session_factory
+
+    factory = get_session_factory()
+    async with factory() as db:
+        row = await db.get(RefreshToken, _hash_refresh_token(token))
+        if row is not None:
+            await db.delete(row)
+            await db.commit()
 
 
 async def verify_google_token(credential: str) -> Optional[dict]:
