@@ -1,0 +1,48 @@
+name: Keep database awake
+
+# Supabase pauses free projects after 7 days with no activity, which would take
+# the app down until someone clicks "Restore" in the dashboard. /api/health runs
+# a real query against Postgres, so pinging it every few days counts as activity
+# and the project never pauses.
+#
+# Setup: add a repo variable BACKEND_HEALTH_URL pointing at the deployed health
+# endpoint, e.g. https://goon-backend.onrender.com/api/health
+# (Settings → Secrets and variables → Actions → Variables).
+#
+# Note: GitHub disables scheduled workflows in repos with 60 days of no commits.
+on:
+  schedule:
+    - cron: "0 6 */3 * *" # every 3 days, 06:00 UTC — well inside the 7-day window
+  workflow_dispatch: # allow a manual run from the Actions tab
+
+jobs:
+  ping:
+    name: Ping /api/health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        env:
+          HEALTH_URL: ${{ vars.BACKEND_HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "::warning::BACKEND_HEALTH_URL is not set — skipping ping. The Supabase project may pause after 7 idle days."
+            exit 0
+          fi
+
+          # Render/Supabase can cold-start, so retry rather than failing on the
+          # first slow response. /api/health returns 503 when Postgres is down,
+          # which is exactly the case we want this job to surface.
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 60 "$HEALTH_URL" || echo 000)
+            echo "Attempt $attempt: HTTP $code"
+            cat /tmp/health.json 2>/dev/null || true
+            echo
+            if [ "$code" = "200" ]; then
+              echo "Database is awake."
+              exit 0
+            fi
+            sleep 30
+          done
+
+          echo "::error::Health check never returned 200 — the database may be paused or unreachable."
+          exit 1

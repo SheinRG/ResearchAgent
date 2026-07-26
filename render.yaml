@@ -50,10 +50,16 @@ services:
       #   ["https://your-app.vercel.app"]
       - key: CORS_ORIGINS
         sync: false
+      # Supabase Postgres — paste in the dashboard. Render's own free Postgres
+      # is a 30-day trial that expires and is deleted, so it is not used here.
+      #
+      # Use Supabase's SESSION pooler URI (Connect → Session pooler):
+      #   postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:5432/postgres
+      # NOT the direct db.<ref>.supabase.co host (IPv6-only, unreachable from
+      # Render) and NOT the transaction pooler on :6543 (breaks asyncpg's
+      # prepared-statement cache).
       - key: DATABASE_URL
-        fromDatabase:
-          name: goon-db
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           type: redis
@@ -68,8 +74,6 @@ services:
     maxmemoryPolicy: allkeys-lru
     ipAllowList: []                # internal-only access
 
-databases:
-  - name: goon-db
-    plan: free
-    databaseName: research_agent
-    user: agent
+# No `databases:` block on purpose. Render's free Postgres expires after 30 days
+# and is then deleted; Postgres is hosted on Supabase instead and wired in via
+# the DATABASE_URL secret above.

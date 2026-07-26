@@ -118,22 +118,60 @@ _engine = None
 _session_factory = None
 
 
-def _normalize_db_url(url: str) -> str:
-    """
-    Ensure the URL uses the async ``asyncpg`` driver.
+# libpq connection parameters that asyncpg does not accept as kwargs. SQLAlchemy
+# forwards unknown query-string params straight to the driver, so leaving these
+# in the URL crashes on boot with:
+#   TypeError: connect() got an unexpected keyword argument 'sslmode'
+# Supabase and Neon both include them in the URLs they hand out.
+_LIBPQ_ONLY_PARAMS = ("sslmode", "channel_binding", "sslrootcert", "sslcert", "sslkey")
 
-    Managed hosts (Render, Railway, Neon, Heroku-style) hand out
-    ``postgres://`` or ``postgresql://`` URLs, but SQLAlchemy's async engine
-    needs the driver named explicitly as ``postgresql+asyncpg://``. Without
-    this, the app crashes on boot with "dialect requires async driver".
+
+def _normalize_db_url(url: str) -> tuple[str, dict]:
     """
-    if url.startswith("postgresql+"):
-        return url  # already has an explicit driver (e.g. +asyncpg)
-    if url.startswith("postgresql://"):
-        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    Adapt a managed-host Postgres URL to SQLAlchemy + asyncpg.
+
+    Returns ``(url, connect_args)``.
+
+    Two fixes are applied:
+
+    1. **Driver.** Managed hosts (Supabase, Neon, Render, Heroku-style) hand out
+       ``postgres://`` or ``postgresql://`` URLs, but SQLAlchemy's async engine
+       needs the driver named explicitly as ``postgresql+asyncpg://``. Without
+       this, the app crashes on boot with "dialect requires async driver".
+
+    2. **SSL.** Those hosts also append libpq-style params like
+       ``?sslmode=require``, which asyncpg rejects (see ``_LIBPQ_ONLY_PARAMS``).
+       They are stripped from the URL and re-expressed as ``ssl=True`` in
+       connect_args, which is asyncpg's equivalent.
+
+    Note for Supabase: use the **session** pooler (port 5432), not the
+    transaction pooler (6543). Transaction mode is incompatible with asyncpg's
+    prepared-statement cache. The direct ``db.<ref>.supabase.co`` host is
+    IPv6-only and unreachable from IPv4-only platforms such as Render.
+    """
+    from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
     if url.startswith("postgres://"):
-        return "postgresql+asyncpg://" + url[len("postgres://"):]
-    return url
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+
+    if not url.startswith("postgresql+asyncpg://"):
+        return url, {}  # e.g. a non-postgres or already-custom driver URL
+
+    parts = urlsplit(url)
+    kept, requires_ssl = [], False
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key not in _LIBPQ_ONLY_PARAMS:
+            kept.append((key, value))
+            continue
+        # sslmode=disable is the only value that means "no TLS"; every other
+        # mode (require/verify-ca/verify-full/prefer/allow) wants a TLS socket.
+        if key == "sslmode" and value.lower() != "disable":
+            requires_ssl = True
+
+    connect_args: dict = {"ssl": True} if requires_ssl else {}
+    return urlunsplit(parts._replace(query=urlencode(kept))), connect_args
 
 
 def get_engine():
@@ -141,12 +179,18 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
+        url, connect_args = _normalize_db_url(settings.database_url)
         _engine = create_async_engine(
-            _normalize_db_url(settings.database_url),
+            url,
             echo=False,
             pool_size=5,
             max_overflow=10,
+            # Managed Postgres (Supabase pooler, Neon autosuspend) drops idle
+            # connections server-side; without this the app serves one 500 per
+            # stale connection after a quiet period.
             pool_pre_ping=True,
+            pool_recycle=1800,
+            connect_args=connect_args,
         )
     return _engine
 
