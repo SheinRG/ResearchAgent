@@ -160,17 +160,24 @@ def _normalize_db_url(url: str) -> tuple[str, dict]:
         return url, {}  # e.g. a non-postgres or already-custom driver URL
 
     parts = urlsplit(url)
-    kept, requires_ssl = [], False
+    kept, sslmode = [], None
     for key, value in parse_qsl(parts.query, keep_blank_values=True):
-        if key not in _LIBPQ_ONLY_PARAMS:
+        if key == "sslmode":
+            sslmode = value.lower()
+        elif key not in _LIBPQ_ONLY_PARAMS:
             kept.append((key, value))
-            continue
-        # sslmode=disable is the only value that means "no TLS"; every other
-        # mode (require/verify-ca/verify-full/prefer/allow) wants a TLS socket.
-        if key == "sslmode" and value.lower() != "disable":
-            requires_ssl = True
+        # other libpq-only params (channel_binding, sslcert, ...) are dropped
 
-    connect_args: dict = {"ssl": True} if requires_ssl else {}
+    # asyncpg accepts the libpq sslmode *strings* directly, so pass the mode
+    # through rather than translating it. Do NOT map require -> ssl=True: in
+    # libpq "require" means encrypt-without-verifying, but asyncpg's ssl=True
+    # means verify-full. Supabase's pooler serves a chain that fails default
+    # verification, so ssl=True raises SSLCertVerificationError on connect.
+    connect_args: dict = {"ssl": sslmode} if sslmode else {}
+
+    # With no sslmode, asyncpg defaults to "prefer": TLS when the server offers
+    # it (verified TLS 1.3 against the Supabase pooler), plaintext against the
+    # local docker-compose Postgres, which serves no TLS. Both work untouched.
     return urlunsplit(parts._replace(query=urlencode(kept))), connect_args
 
 
