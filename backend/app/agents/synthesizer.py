@@ -71,6 +71,7 @@ async def _generate_follow_ups(
             ),
             system=FOLLOWUP_SYSTEM,
             temperature=0.5,
+            stage="follow_ups",
         )
         suggestions = result.get("suggestions", [])
         if isinstance(suggestions, list):
@@ -275,6 +276,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
             temperature=0.4,
             model=settings.groq_synth_model,
             max_tokens=settings.synth_max_tokens,
+            stage="synthesis",
         ):
             full_answer += token
             if sse_callback:

@@ -144,6 +144,7 @@ async def router_node(state: ResearchState) -> dict:
             ),
             system=TRIAGE_SYSTEM.format(current_year=date.today().year),
             temperature=0.2,
+            stage="triage",
         )
 
         candidate = str(result.get("mode", "")).strip().lower()

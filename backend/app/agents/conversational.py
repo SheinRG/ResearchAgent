@@ -67,6 +67,7 @@ async def conversational_node(state: ResearchState) -> dict:
             temperature=0.6,
             model=settings.groq_synth_model,
             max_tokens=800,
+            stage="chat",
         ):
             full_answer += token
             if sse_callback:

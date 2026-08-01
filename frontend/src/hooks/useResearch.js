@@ -171,7 +171,12 @@ export default function useResearch() {
     await sleep(500);
     if (signal.aborted) return;
     
-    const mockAnswer = `Here is a comprehensive research summary on **${query}** based on our gold-standard sources:
+    // The banner is part of the answer text on purpose: it travels with the
+    // content into exports, copy/paste, and saved sessions, so a fabricated
+    // answer can never be mistaken for a real one after it leaves the screen.
+    const mockAnswer = `> ⚠️ **SIMULATED RESPONSE — the backend is unreachable and this is dev mode.** Every source, citation, and figure below is fabricated placeholder content. Nothing here was researched.
+
+Here is a comprehensive research summary on **${query}** based on our gold-standard sources:
 
 ### 1. Overview & Context
 Research on **${query}** indicates that it is rapidly transforming technical architectures [1]. Early definitions highlights its role as a key driver for efficiency and modular growth in modern application designs [2].
@@ -207,7 +212,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     });
     
     // Step 6: Done
-    handleEvent("done", { session_id: "mock-session-id", total_sources: 3, iterations: 1, confidence: 0.95 });
+    handleEvent("done", { session_id: "mock-session-id", total_sources: 3, iterations: 1, confidence: 0.95, simulated: true });
   }, [handleEvent]);
 
   const startResearch = useCallback(async (query, maxIterations = 1, token = null, history = [], sessionId = null, onComplete = null, documents = [], _isRetry = false) => {

@@ -53,6 +53,18 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     cache_ttl: int = 3600  # 1 hour in seconds
 
+    # --- Answer cache (exact match) ---
+    # Short-circuits an identical repeat question before it reaches the graph,
+    # skipping the triage call, search, rerank AND the expensive synthesis call.
+    # The existing search/scrape caches only avoid the network hops; both LLM
+    # calls still ran on a repeat query before this.
+    answer_cache_enabled: bool = True
+    # Deliberately short. The cache is consulted BEFORE triage runs, so we cannot
+    # yet tell an evergreen question ("what is quantum computing") from a live
+    # one ("bitcoin price today"). A tight TTL bounds how stale a hit can be
+    # until triage emits a time-sensitivity flag.
+    answer_cache_ttl: int = 900  # 15 minutes
+
     # --- PostgreSQL ---
     database_url: str = "postgresql+asyncpg://agent:agent@postgres:5432/research_agent"
 

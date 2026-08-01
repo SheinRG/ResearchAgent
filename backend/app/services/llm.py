@@ -2,13 +2,19 @@
 Async Groq client for cloud LLM inference.
 Supports regular generation, streaming, and structured JSON output,
 with exponential-backoff retries on transient failures.
+
+Every call reports its token usage: each method takes a ``stage`` label (which
+pipeline step is spending the tokens) and an optional ``on_usage`` callback.
+Usage is always logged; the callback is the seam a tracing backend hooks into
+without this module having to know about it.
 """
 
 import json
 import time
 import asyncio
 import logging
-from typing import AsyncGenerator, Optional
+from dataclasses import dataclass
+from typing import AsyncGenerator, Callable, Optional
 
 import httpx
 from groq import AsyncGroq
@@ -20,6 +26,21 @@ logger = logging.getLogger(__name__)
 # HTTP statuses worth retrying — transient server/throttling errors only.
 # 4xx like 400/401/404 are permanent and must NOT be retried.
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+    """Token accounting for a single LLM call, attributed to a pipeline stage."""
+    stage: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+# A usage observer. Kept synchronous on purpose: it is invoked from inside the
+# streaming loop, so it must never await or it would stall token delivery.
+UsageCallback = Callable[[TokenUsage], None]
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -52,6 +73,44 @@ class GroqClient:
         self._health_cache: Optional[bool] = None
         self._health_cache_at: float = 0.0
 
+    def _record_usage(
+        self,
+        stage: str,
+        model: str,
+        raw_usage: object,
+        on_usage: Optional[UsageCallback],
+    ) -> Optional[TokenUsage]:
+        """
+        Log a call's token usage and hand it to the observer, if any.
+
+        ``raw_usage`` is the SDK's usage object (or None when the API omitted
+        it). Never raises: token accounting must not be able to fail a request.
+        """
+        if raw_usage is None:
+            logger.debug("LLM usage unavailable for stage=%s model=%s", stage, model)
+            return None
+
+        usage = TokenUsage(
+            stage=stage or "unknown",
+            model=model,
+            prompt_tokens=int(getattr(raw_usage, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(raw_usage, "completion_tokens", 0) or 0),
+            total_tokens=int(getattr(raw_usage, "total_tokens", 0) or 0),
+        )
+        logger.info(
+            "LLM usage: stage=%s model=%s prompt=%d completion=%d total=%d",
+            usage.stage, usage.model,
+            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
+        )
+
+        if on_usage is not None:
+            try:
+                on_usage(usage)
+            except Exception as e:
+                logger.warning("on_usage callback failed (ignored): %s", e)
+
+        return usage
+
     async def generate(
         self,
         prompt: str,
@@ -60,6 +119,8 @@ class GroqClient:
         format_json: bool = False,
         model: Optional[str] = None,
         max_tokens: int = 2048,
+        stage: str = "",
+        on_usage: Optional[UsageCallback] = None,
     ) -> str:
         """
         Generate a complete response from Groq.
@@ -71,6 +132,8 @@ class GroqClient:
             format_json: If True, request JSON formatted output.
             model: Override the default model for this call.
             max_tokens: Maximum tokens to generate.
+            stage: Pipeline stage spending these tokens (e.g. "triage").
+            on_usage: Optional observer called with this call's TokenUsage.
 
         Returns:
             The full generated text.
@@ -93,6 +156,9 @@ class GroqClient:
         for attempt in range(self.max_retries + 1):
             try:
                 response = await self.client.chat.completions.create(**kwargs)
+                self._record_usage(
+                    stage, kwargs["model"], getattr(response, "usage", None), on_usage
+                )
                 return response.choices[0].message.content or ""
             except Exception as e:
                 if attempt < self.max_retries and _is_retryable(e):
@@ -113,6 +179,8 @@ class GroqClient:
         temperature: float = 0.7,
         model: Optional[str] = None,
         max_tokens: int = 2048,
+        stage: str = "",
+        on_usage: Optional[UsageCallback] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream tokens from Groq one at a time.
@@ -123,6 +191,8 @@ class GroqClient:
             temperature: Sampling temperature.
             model: Override the default model for this call.
             max_tokens: Maximum tokens to generate.
+            stage: Pipeline stage spending these tokens (e.g. "synthesis").
+            on_usage: Optional observer called once, after the final chunk.
 
         Yields:
             Individual tokens as they're generated.
@@ -132,17 +202,23 @@ class GroqClient:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        resolved_model = model or self.model
+
         # Retry only while establishing the stream. Once tokens have started
         # flowing we can't safely restart without duplicating output.
         stream = None
         for attempt in range(self.max_retries + 1):
             try:
                 stream = await self.client.chat.completions.create(
-                    model=model or self.model,
+                    model=resolved_model,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     stream=True,
+                    # Ask for a trailing usage chunk. Without this a streamed
+                    # call reports no token counts at all — and the synthesizer,
+                    # the most expensive call in the pipeline, is streamed.
+                    stream_options={"include_usage": True},
                 )
                 break
             except Exception as e:
@@ -157,20 +233,33 @@ class GroqClient:
                 logger.error("Groq stream failed: %s", e)
                 raise
 
+        raw_usage = None
         try:
             async for chunk in stream:
+                # The usage chunk arrives last and carries an EMPTY choices list,
+                # so choices must be checked before indexing it.
+                if getattr(chunk, "usage", None) is not None:
+                    raw_usage = chunk.usage
+                if not chunk.choices:
+                    continue
                 token = chunk.choices[0].delta.content
                 if token:
                     yield token
         except Exception as e:
             logger.error("Groq stream interrupted mid-flight: %s", e)
             raise
+        finally:
+            # Report whatever usage arrived, even if the stream broke partway —
+            # a failed expensive call still cost tokens worth knowing about.
+            self._record_usage(stage, resolved_model, raw_usage, on_usage)
 
     async def generate_structured(
         self,
         prompt: str,
         system: str = "",
         temperature: float = 0.3,
+        stage: str = "",
+        on_usage: Optional[UsageCallback] = None,
     ) -> dict:
         """
         Generate structured JSON output from Groq.
@@ -179,6 +268,8 @@ class GroqClient:
             prompt: The user prompt (should request JSON output).
             system: Optional system prompt.
             temperature: Lower temperature for more deterministic JSON.
+            stage: Pipeline stage spending these tokens (e.g. "triage").
+            on_usage: Optional observer called with this call's TokenUsage.
 
         Returns:
             Parsed JSON dictionary.
@@ -188,6 +279,8 @@ class GroqClient:
             system=system,
             temperature=temperature,
             format_json=True,
+            stage=stage,
+            on_usage=on_usage,
         )
 
         try:

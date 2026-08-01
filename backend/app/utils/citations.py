@@ -129,11 +129,17 @@ def extract_citations(
     matches = CITATION_PATTERN.findall(text)
     seen_indices = set()
     citations = []
+    # Markers pointing at a source number that was never given to the model.
+    # These are dropped from the returned citations, but they are the clearest
+    # signal available that the model invented a reference, so they are counted
+    # and reported rather than discarded silently.
+    invalid_indices: list[int] = []
 
     for match in matches:
         try:
             idx = int(match)
             if idx < 1 or idx > len(sources):
+                invalid_indices.append(idx)
                 continue
             if idx in seen_indices:
                 continue
@@ -154,7 +160,20 @@ def extract_citations(
         except (ValueError, IndexError):
             continue
 
-    logger.info("Extracted %d unique citations from answer", len(citations))
+    if invalid_indices:
+        logger.warning(
+            "Answer cited %d marker(s) with no matching source (valid range 1-%d): %s "
+            "— possible fabricated citation",
+            len(invalid_indices),
+            len(sources),
+            sorted(set(invalid_indices)),
+        )
+
+    logger.info(
+        "Extracted %d unique citations from answer (%d invalid marker(s) dropped)",
+        len(citations),
+        len(invalid_indices),
+    )
     return citations
 
 

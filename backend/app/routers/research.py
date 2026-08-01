@@ -17,10 +17,36 @@ from app.models.schemas import ResearchRequest
 from app.models.database import User, ResearchSession, ResearchQuery, get_session_factory
 from app.agents.graph import get_research_graph
 from app.routers.auth import get_current_user, check_rate_limit
+from app.services.answer_cache import (
+    build_answer_key,
+    cached_state_for_save,
+    get_cached_answer,
+    is_cacheable,
+    iter_replay_events,
+    store_answer,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["research"])
+
+# Strong references to detached background tasks. asyncio only holds a weak
+# reference to a running task, so without this the garbage collector is free to
+# cancel a session write mid-flight.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    """Run a coroutine detached from the request, keeping it alive until done."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+def _sse(event_type: str, data: dict) -> str:
+    """Serialize one SSE frame."""
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
 async def _save_session(session_id: str, query: str, final_state: dict, user_id: str = "", documents: list | None = None) -> None:
@@ -71,7 +97,54 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
     async def event_stream() -> AsyncGenerator[str, None]:
         session_id = request.session_id or str(uuid.uuid4())
         start_time = time.monotonic()
+        settings = get_settings()
         event_queue: asyncio.Queue = asyncio.Queue()
+
+        history = [{"query": h.query, "answer": h.answer} for h in request.history]
+        stored_documents = [
+            {"name": d.name, "file_id": d.file_id, "mime": d.mime, "size": d.size}
+            for d in request.documents
+            if d.file_id
+        ]
+
+        # --- Exact-match answer cache -------------------------------------
+        # Consulted before the graph runs, so a repeat question skips triage,
+        # search, rerank AND synthesis. Uploads bypass entirely: the document
+        # text is not part of the key, so a hit could answer from the wrong file.
+        cache_key: str | None = None
+        if settings.answer_cache_enabled and not request.documents:
+            cache_key = build_answer_key(
+                query=request.query,
+                history=history,
+                user_name=user_name,
+                model=settings.groq_synth_model,
+            )
+            cached = await get_cached_answer(cache_key)
+            if cached:
+                logger.info("Answer cache HIT for: %s", request.query[:80])
+                for event_type, data in iter_replay_events(cached):
+                    yield _sse(event_type, data)
+
+                # Persist the turn so a cached answer still lands in the user's
+                # history — detached, so it never delays the response.
+                _spawn(_save_session(
+                    session_id=session_id,
+                    query=request.query,
+                    final_state=cached_state_for_save(cached),
+                    user_id=user_id,
+                    documents=stored_documents,
+                ))
+
+                yield _sse("done", {
+                    "session_id": session_id,
+                    "total_sources": len(cached.get("sources", [])),
+                    "iterations": 1,
+                    "confidence": cached.get("confidence", 0.0),
+                    "model": settings.groq_synth_model,
+                    "latency_ms": int((time.monotonic() - start_time) * 1000),
+                    "cached": True,
+                })
+                return
 
         async def queue_callback(event_type: str, data: dict):
             await event_queue.put((event_type, data))
@@ -82,7 +155,7 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 initial_state = {
                     "query": request.query,
                     "max_iterations": request.max_iterations,
-                    "history": [{"query": h.query, "answer": h.answer} for h in request.history],
+                    "history": history,
                     "user_name": user_name,
                     "iteration": 0,
                     "sub_queries": [],
@@ -122,7 +195,6 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 event_type, data = await asyncio.wait_for(event_queue.get(), timeout=300)
                 if event_type == "_final_state":
                     final = data
-                    settings = get_settings()
                     done_data = {
                         "session_id": session_id,
                         "total_sources": len(final.get("all_sources", final.get("search_results", []))),
@@ -130,30 +202,31 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                         "confidence": final.get("confidence", 0.0),
                         "model": settings.groq_synth_model,
                         "latency_ms": int((time.monotonic() - start_time) * 1000),
+                        "cached": False,
                     }
-                    try:
-                        await _save_session(
-                            session_id=session_id,
-                            query=request.query,
-                            final_state=final,
-                            user_id=user_id,
-                            documents=[
-                                {"name": d.name, "file_id": d.file_id, "mime": d.mime, "size": d.size}
-                                for d in request.documents
-                                if d.file_id
-                            ],
-                        )
-                    except Exception as e:
-                        logger.error("Failed to save session: %s", e)
-                    yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
+
+                    # Persist detached: a slow managed-Postgres write used to sit
+                    # between the answer finishing and the user seeing "done".
+                    _spawn(_save_session(
+                        session_id=session_id,
+                        query=request.query,
+                        final_state=final,
+                        user_id=user_id,
+                        documents=stored_documents,
+                    ))
+
+                    if cache_key and is_cacheable(final, bool(request.documents)):
+                        _spawn(store_answer(cache_key, final))
+
+                    yield _sse("done", done_data)
                     break
                 elif event_type == "error":
-                    yield f"event: error\ndata: {json.dumps(data)}\n\n"
+                    yield _sse("error", data)
                 else:
-                    yield f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+                    yield _sse(event_type, data)
         except asyncio.TimeoutError:
             logger.error("Research timed out after 5 minutes")
-            yield f"event: error\ndata: {json.dumps({'message': 'Research timed out'})}\n\n"
+            yield _sse("error", {"message": "Research timed out"})
         finally:
             if not agent_task.done():
                 agent_task.cancel()
