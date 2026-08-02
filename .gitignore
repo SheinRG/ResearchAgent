@@ -31,6 +31,10 @@ dist/
 # are uploaded as a CI artifact instead of versioned.
 backend/evals/results/
 
+# Scratch files from local smoke-testing (may contain auth tokens).
+tok.tmp
+*.tmp
+
 # ===== Logs / OS / Editor =====
 *.log
 npm-debug.log*
