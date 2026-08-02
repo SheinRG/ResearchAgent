@@ -233,6 +233,8 @@ class SessionTurn(BaseModel):
     iterations: int = 1
     follow_up_suggestions: list[str] = Field(default_factory=list)
     documents: list = Field(default_factory=list)   # raw dicts: name/file_id/mime/size
+    # Reasoning trace for the Trace tab; {} for turns stored before it existed.
+    trace: dict = Field(default_factory=dict)
     created_at: str
 
 

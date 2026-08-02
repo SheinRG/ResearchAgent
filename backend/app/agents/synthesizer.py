@@ -11,6 +11,7 @@ from datetime import date
 
 from app.services.llm import get_llm_client
 from app.utils.citations import build_cited_context, extract_citations_detailed
+from app.utils.trace import build_trace
 from app.agents.messages import NO_SOURCES_MESSAGE, SYNTHESIS_ERROR_MESSAGE
 from app.agents.state import ResearchState, format_history
 from app.config import get_settings
@@ -175,13 +176,25 @@ async def synthesizer_node(state: ResearchState) -> dict:
     if not cited_sources:
         logger.warning("Synthesizer: no sources available, returning fallback message")
         message = NO_SOURCES_MESSAGE
+        # Still worth a trace: it shows what was searched, which is exactly the
+        # question a user asks when an answer comes back empty.
+        empty_trace = build_trace(
+            sub_queries=sub_queries,
+            all_chunks=state.get("scraped_content", []),
+            ranked_chunks=ranked_chunks,
+            cited_sources=[],
+            citations=[],
+            reranker_model=settings.reranker_model,
+        )
         if sse_callback:
             await sse_callback("phase", {"phase": "writing", "message": "Synthesizing your answer..."})
             await sse_callback("token", {"token": message})
+            await sse_callback("trace", empty_trace)
         return {
             "draft_answer": message,
             "citations": [],
             "invalid_citations": 0,
+            "trace": empty_trace,
             "all_sources": [],
             "phase": "writing",
         }
@@ -287,6 +300,20 @@ async def synthesizer_node(state: ResearchState) -> dict:
         citations, invalid_markers = extract_citations_detailed(full_answer, cited_sources)
         citation_dicts = [c.model_dump() for c in citations]
 
+        # The reasoning trace can only be built here: it needs the reranker's
+        # scores (from state), the list that reached the prompt, AND which of
+        # those the finished answer actually cited.
+        trace = build_trace(
+            sub_queries=sub_queries,
+            all_chunks=state.get("scraped_content", []),
+            ranked_chunks=ranked_chunks,
+            cited_sources=cited_sources,
+            citations=citations,
+            reranker_model=settings.reranker_model,
+        )
+        if sse_callback:
+            await sse_callback("trace", trace)
+
         # The follow-up call has been running alongside the stream; collect it
         # (already finished by now) and stream the suggestions to the UI.
         follow_ups = await followup_task
@@ -304,6 +331,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
             "draft_answer": full_answer,
             "citations": citation_dicts,
             "invalid_citations": len(invalid_markers),
+            "trace": trace,
             "all_sources": cited_sources,
             "follow_up_suggestions": follow_ups,
             "confidence": confidence,

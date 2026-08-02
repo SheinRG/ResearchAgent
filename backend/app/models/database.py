@@ -73,6 +73,9 @@ class ResearchQuery(Base):
     invalid_citations = Column(Integer, default=0)   # [n] markers with no such source
     total_tokens = Column(Integer, default=0)        # across every LLM call in the turn
     cost_usd = Column(Float, default=0.0)            # estimated; see services.usage
+    # Reasoning trace (ranked sources + scores + cited/sent/considered status).
+    # Stored so reopening an old thread shows the same working, not just the answer.
+    trace = Column(JSON, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     session = relationship("ResearchSession", back_populates="queries")
@@ -252,6 +255,9 @@ async def init_db() -> None:
             )
             await conn.execute(
                 text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION DEFAULT 0")
+            )
+            await conn.execute(
+                text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS trace JSON")
             )
         logger.info("Database tables created successfully")
     except Exception as e:

@@ -1450,6 +1450,286 @@ body::before {
 }
 
 /* ============================================================
+   TRACE TAB — what was ranked, sent to the model, and cited
+   ============================================================ */
+
+.trace-view {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    padding-top: 4px;
+}
+
+/* --- Funnel: ranked → kept → sent → cited --- */
+.trace-funnel {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 14px 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--bg-card);
+}
+
+.trace-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 62px;
+}
+
+.trace-stat-value {
+    font-family: var(--font-mono);
+    font-size: 1.15rem;
+    line-height: 1.1;
+    color: var(--text-primary);
+}
+
+.trace-stat-label {
+    font-size: 0.66rem;
+    color: var(--text-tertiary);
+    letter-spacing: 0.02em;
+}
+
+.trace-arrow {
+    color: var(--text-tertiary);
+    opacity: 0.5;
+    font-size: 0.9rem;
+    margin-top: 6px;
+}
+
+/* --- Sections --- */
+.trace-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.trace-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+}
+
+.trace-model {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    letter-spacing: 0;
+    text-transform: none;
+    opacity: 0.65;
+}
+
+.trace-subqueries {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.trace-subqueries li {
+    position: relative;
+    padding-left: 18px;
+    font-size: 0.86rem;
+    color: var(--text-secondary);
+}
+
+.trace-subqueries li::before {
+    content: "↳";
+    position: absolute;
+    left: 0;
+    color: var(--text-tertiary);
+    opacity: 0.7;
+}
+
+/* --- Ranked source list --- */
+.trace-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.trace-item {
+    display: flex;
+    gap: 14px;
+    padding: 11px 10px;
+    border-radius: 8px;
+    border-left: 2px solid transparent;
+    transition: background 0.15s ease;
+}
+
+.trace-item:hover {
+    background: var(--bg-hover);
+}
+
+.trace-item-cited {
+    border-left-color: var(--accent);
+}
+
+/* Everything the model never saw is dimmed — present for completeness, but
+   visually subordinate to what actually shaped the answer. */
+.trace-item-considered {
+    opacity: 0.58;
+}
+
+.trace-score {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    width: 62px;
+    flex-shrink: 0;
+    padding-top: 2px;
+}
+
+.trace-score-bar {
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border-subtle);
+    overflow: hidden;
+}
+
+.trace-score-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--accent);
+}
+
+.trace-item-considered .trace-score-fill {
+    background: var(--text-tertiary);
+}
+
+.trace-score-value {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    color: var(--text-tertiary);
+}
+
+.trace-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    flex: 1;
+}
+
+.trace-item-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.trace-title {
+    font-size: 0.88rem;
+    color: var(--text-primary);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+a.trace-title:hover {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.trace-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 2px 7px;
+    border-radius: 20px;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.trace-badge-cited {
+    background: var(--success-bg);
+    color: var(--success);
+}
+
+.trace-badge-sent {
+    background: var(--border-subtle);
+    color: var(--text-secondary);
+}
+
+.trace-badge-considered {
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-tertiary);
+}
+
+.trace-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.7rem;
+    color: var(--text-tertiary);
+}
+
+.trace-dot {
+    opacity: 0.5;
+}
+
+.trace-preview {
+    margin: 2px 0 0;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    opacity: 0.85;
+}
+
+.trace-empty,
+.trace-footnote {
+    margin: 0;
+    font-size: 0.74rem;
+    line-height: 1.6;
+    color: var(--text-tertiary);
+}
+
+.trace-footnote {
+    padding-top: 14px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 640px) {
+    .trace-item {
+        gap: 10px;
+        padding: 10px 6px;
+    }
+
+    .trace-score {
+        width: 46px;
+    }
+
+    .trace-funnel {
+        gap: 8px;
+        padding: 12px;
+    }
+
+    .trace-arrow {
+        display: none;
+    }
+}
+
+/* ============================================================
    FOLLOW-UPS
    ============================================================ */
 

@@ -146,6 +146,7 @@ async def get_session(session_id: str):
                     iterations=row.iterations or 1,
                     follow_up_suggestions=row.follow_up_suggestions or [],
                     documents=row.documents or [],
+                    trace=row.trace or {},
                     created_at=row.created_at.isoformat() if row.created_at else "",
                 )
             )

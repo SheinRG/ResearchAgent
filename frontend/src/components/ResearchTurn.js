@@ -93,6 +93,7 @@ export default function ResearchTurn({
   query,
   sources = [],
   images = [],
+  trace = null,
   answer = "",
   isStreaming = false,
   isLive = false,
@@ -386,7 +387,7 @@ export default function ResearchTurn({
 
       {/* Answer area — tabs then content. */}
       <div className="chat-answer">
-        <ResearchTabs sources={sources} images={images}>
+        <ResearchTabs sources={sources} images={images} trace={trace}>
           {answerPanel}
         </ResearchTabs>
       </div>

@@ -112,6 +112,9 @@ class ResearchState(TypedDict, total=False):
     # clearest fabrication signal available. 0 is the healthy case.
     invalid_citations: int
     all_sources: list[dict]                             # Flattened unique sources for UI
+    # Reasoning trace: what was ranked, what reached the prompt, what got cited.
+    # Built in the synthesizer because only it knows all three. See utils.trace.
+    trace: dict
 
     # --- Reflector Output ---
     reflection: dict                                    # Reflection analysis

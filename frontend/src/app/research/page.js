@@ -27,6 +27,7 @@ function ResearchContent() {
     sources,
     images,
     answer,
+    trace,
     isStreaming,
     error,
     startResearch,
@@ -85,6 +86,7 @@ function ResearchContent() {
         answer:   turn.answer,
         sources:  turn.sources,
         images:   turn.images,
+        trace:    turn.trace,
         followUps: turn.followUps,
         doneData:  turn.doneData,
         documents: activeDocsRef.current,
@@ -131,6 +133,10 @@ function ResearchContent() {
           answer:    t.answer,
           sources:   t.sources   || [],
           images:    [],           // stored turns have no images; Images tab will be empty
+          // Stored with the turn, so reopening a thread shows the same working.
+          // Turns saved before the Trace tab existed come back as {} and the
+          // tab simply doesn't appear for them.
+          trace:     t.trace || null,
           followUps: t.follow_up_suggestions || [],
           documents: (t.documents || []).map((d) => ({
             name: d.name || d.filename || "",
@@ -266,6 +272,7 @@ function ResearchContent() {
             query={turn.query}
             sources={turn.sources}
             images={turn.images}
+            trace={turn.trace}
             answer={turn.answer}
             isStreaming={false}
             doneData={turn.doneData}
@@ -282,6 +289,7 @@ function ResearchContent() {
               query={activeQuery}
               sources={sources}
               images={images}
+              trace={trace}
               answer={answer}
               isStreaming={isStreaming}
               isLive

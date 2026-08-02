@@ -81,6 +81,7 @@ async def _save_session(
                 invalid_citations=final_state.get("invalid_citations", 0),
                 total_tokens=(usage or {}).get("total_tokens", 0),
                 cost_usd=(usage or {}).get("cost_usd", 0.0),
+                trace=final_state.get("trace") or {},
             )
             db.add(research_query)
             await db.commit()

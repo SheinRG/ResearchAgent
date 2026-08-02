@@ -148,6 +148,7 @@ async def store_answer(key: str, final_state: dict) -> None:
         "citations": final_state.get("citations", []),
         "invalid_citations": final_state.get("invalid_citations", 0),
         "confidence": final_state.get("confidence", 0.0),
+        "trace": final_state.get("trace") or {},
     }
     await cache_set(_PREFIX, key, payload, ttl=settings.answer_cache_ttl)
     logger.info(
@@ -189,6 +190,12 @@ def iter_replay_events(payload: dict) -> list[tuple[str, dict]]:
     events.append(("phase", {"phase": "writing", "message": "Synthesizing your answer..."}))
     events.append(("token", {"token": payload.get("answer", "")}))
 
+    # The live pipeline emits the trace right after the answer; a replay keeps
+    # the same order so the Trace tab fills identically on a cache hit.
+    trace = payload.get("trace") or {}
+    if trace.get("sources") or trace.get("sub_queries"):
+        events.append(("trace", trace))
+
     follow_ups = payload.get("follow_ups") or []
     if follow_ups:
         events.append(("follow_up", {"suggestions": follow_ups}))
@@ -209,6 +216,7 @@ def cached_state_for_save(payload: dict) -> dict[str, Any]:
         # Entries cached before this field existed read as 0, which is the same
         # thing a healthy answer reports.
         "invalid_citations": payload.get("invalid_citations", 0),
+        "trace": payload.get("trace") or {},
         "confidence": payload.get("confidence", 0.0),
         "follow_up_suggestions": payload.get("follow_ups", []),
         "iteration": 1,

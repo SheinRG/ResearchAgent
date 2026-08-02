@@ -28,6 +28,7 @@ export default function useResearch() {
   const [sources, setSources] = useState([]);
   const [images, setImages] = useState([]);
   const [answer, setAnswer] = useState("");
+  const [trace, setTrace] = useState(null);
   const [followUps, setFollowUps] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isDone, setIsDone] = useState(false);
@@ -40,6 +41,7 @@ export default function useResearch() {
   const answerRef = useRef("");
   const sourcesRef = useRef([]);
   const imagesRef = useRef([]);
+  const traceRef = useRef(null);
   const followUpsRef = useRef([]);
   const queryRef = useRef("");
   const errorRef = useRef(null);
@@ -84,6 +86,13 @@ export default function useResearch() {
         setAnswer(answerRef.current);
         break;
 
+      // What the pipeline ranked, sent to the model, and actually cited.
+      // Arrives once, after the answer, since it needs the finished citations.
+      case "trace":
+        traceRef.current = data || null;
+        setTrace(traceRef.current);
+        break;
+
       case "follow_up":
         followUpsRef.current = data.suggestions || [];
         setFollowUps(followUpsRef.current);
@@ -101,6 +110,7 @@ export default function useResearch() {
             answer: answerRef.current,
             sources: sourcesRef.current,
             images: imagesRef.current,
+            trace: traceRef.current,
             followUps: followUpsRef.current,
             doneData: data,
           });
@@ -223,6 +233,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     setSources([]);
     setImages([]);
     setAnswer("");
+    setTrace(null);
     setFollowUps([]);
     setIsStreaming(true);
     setIsDone(false);
@@ -233,6 +244,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     answerRef.current = "";
     sourcesRef.current = [];
     imagesRef.current = [];
+    traceRef.current = null;
     followUpsRef.current = [];
     errorRef.current = null;
     queryRef.current = query;
@@ -370,6 +382,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     sources,
     images,
     answer,
+    trace,
     followUps,
     isStreaming,
     isDone,
