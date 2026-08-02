@@ -8,6 +8,7 @@ directly from the model — no search, no scraping, no citations.
 import logging
 
 from app.services.llm import get_llm_client
+from app.agents.messages import CHAT_ERROR_MESSAGE
 from app.agents.state import ResearchState, format_history
 from app.config import get_settings
 
@@ -74,7 +75,7 @@ async def conversational_node(state: ResearchState) -> dict:
                 await sse_callback("token", {"token": token})
     except Exception as e:
         logger.error("Conversational node failed: %s", e)
-        full_answer = "Sorry, I had trouble responding just now. Please try again."
+        full_answer = CHAT_ERROR_MESSAGE
         if sse_callback:
             await sse_callback("token", {"token": full_answer})
 

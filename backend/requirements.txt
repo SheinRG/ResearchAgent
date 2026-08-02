@@ -40,6 +40,9 @@ python-multipart==0.0.20
 
 # --- Utilities ---
 python-dotenv==1.0.1
+# Reads the eval harness query set. Already arrives transitively via
+# langchain-core; pinned here because evals/ imports it directly.
+PyYAML==6.0.2
 
 # --- Observability (optional; active only when SENTRY_DSN is set) ---
 sentry-sdk[fastapi]==2.20.0

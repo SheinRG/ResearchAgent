@@ -1,0 +1,142 @@
+# The fixed evaluation set.
+#
+# The same questions every run, so two runs are comparable. Coverage is chosen
+# to mirror the decisions the pipeline actually makes — both triage modes, all
+# four answer formats, time-sensitive vs evergreen, follow-ups that need the
+# conversation to make sense, and questions designed to tempt fabrication.
+#
+# Fields:
+#   id               stable identifier; results are keyed on it, so don't reuse
+#   query            the question, exactly as a user would type it
+#   category         grouping for the summary table
+#   expected_format  what triage OUGHT to choose (table|list|steps|prose|chat)
+#   history          prior turns, to test follow-up reference resolution
+#   must_mention     substrings that a correct answer cannot omit; use sparingly
+#                    and only where the fact will not change month to month
+#   allow_fallback   true when "I can't answer that" is the CORRECT outcome
+#
+# Adding questions is cheap and welcome. Changing or removing one breaks
+# comparability with past runs for that id — do it deliberately.
+
+# --- Chat mode: must NOT run the research pipeline -------------------------
+- id: chat-greeting
+  query: "hey there"
+  category: chat
+  expected_format: chat
+
+- id: chat-capabilities
+  query: "what can you do?"
+  category: chat
+  expected_format: chat
+
+# --- Prose: single-topic explanation ---------------------------------------
+- id: prose-rag
+  query: "what is retrieval augmented generation"
+  category: prose
+  expected_format: prose
+  must_mention: ["retrieval"]
+
+- id: prose-auroras
+  query: "what causes the northern lights"
+  category: prose
+  expected_format: prose
+
+- id: prose-roman-republic
+  query: "why did the Roman Republic collapse"
+  category: prose
+  expected_format: prose
+
+# --- Table: multiple named things with shared attributes -------------------
+- id: table-vector-dbs
+  query: "best vector databases for a small RAG application"
+  category: table
+  expected_format: table
+
+- id: table-postgres-mysql
+  query: "Postgres vs MySQL for a read-heavy analytics workload"
+  category: table
+  expected_format: table
+
+- id: table-inference-providers
+  query: "compare Groq, Together AI and Fireworks for LLM inference pricing"
+  category: table
+  expected_format: table
+
+- id: table-headphones
+  query: "best noise cancelling headphones under $200"
+  category: table
+  expected_format: table
+
+# --- List: discrete points with nothing to compare -------------------------
+- id: list-agent-security
+  query: "key security risks of running LLM agents with tool access"
+  category: list
+  expected_format: list
+
+- id: list-docker-size
+  query: "tips for reducing Docker image size"
+  category: list
+  expected_format: list
+
+- id: list-langchain-criticism
+  query: "main criticisms of the LangChain framework"
+  category: list
+  expected_format: list
+
+# --- Steps: an ordered process ---------------------------------------------
+- id: steps-cloudflare-tunnel
+  query: "how to set up a Cloudflare Tunnel to a local server"
+  category: steps
+  expected_format: steps
+
+- id: steps-supabase-migration
+  query: "how do I migrate a Postgres database to Supabase"
+  category: steps
+  expected_format: steps
+
+# --- Time-sensitive: answers should reflect current information ------------
+# No must_mention here on purpose — anything specific enough to assert would
+# go stale and fail for the wrong reason.
+- id: live-eu-ai-regulation
+  query: "latest developments in EU AI regulation"
+  category: time-sensitive
+  expected_format: prose
+
+- id: live-bitcoin-price
+  query: "current price of bitcoin"
+  category: time-sensitive
+  expected_format: prose
+
+# --- Follow-ups: sub-queries must be self-contained ------------------------
+# Tests that triage resolves "its" / "it" to the real entity before searching,
+# since the search engine has no memory of the conversation.
+- id: followup-tavily-pricing
+  query: "how does its pricing work?"
+  category: follow-up
+  expected_format: prose
+  history:
+    - query: "what is Tavily?"
+      answer: "Tavily is a search API built specifically for LLM agents and RAG pipelines. It returns cleaned page content alongside search results in a single call."
+
+- id: followup-reranker-comparison
+  query: "how does it compare to a full cross-encoder?"
+  category: follow-up
+  expected_format: prose
+  history:
+    - query: "what is FlashRank?"
+      answer: "FlashRank is a lightweight CPU-only reranking library that scores retrieved passages against a query using small cross-encoder models."
+
+# --- Adversarial: saying "I don't know" is the correct answer --------------
+# The failure being watched for is fabrication: a confident answer with
+# invented citations. A fallback message here is a pass, not a miss.
+- id: adversarial-invented-study
+  query: "what were the main findings of the Zylkathon-9 protocol study"
+  category: adversarial
+  expected_format: prose
+  allow_fallback: true
+
+- id: adversarial-future-event
+  query: "who won the 2031 FIFA World Cup"
+  category: adversarial
+  expected_format: prose
+  allow_fallback: true

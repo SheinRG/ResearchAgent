@@ -1,0 +1,109 @@
+name: Eval — research quality
+
+# Runs the fixed evaluation set through the real pipeline and scores it for
+# citation faithfulness, format compliance and retrieval health.
+#
+# WEEKLY, not per-PR, for two reasons:
+#   1. It needs real GROQ_API_KEY / TAVILY_API_KEY secrets, and GitHub does not
+#      expose secrets to workflows triggered by pull requests from forks. A
+#      per-PR eval would simply fail for outside contributors.
+#   2. It spends real money and Tavily credits. ~40-80 credits per run against
+#      a 1,000/month free tier; weekly leaves plenty of room for manual runs.
+#
+# The cheap half of the harness — the scorers — runs on every PR in ci.yml,
+# which needs no keys at all.
+#
+# Setup: add GROQ_API_KEY, TAVILY_API_KEY and SERPER_API_KEY under
+# Settings → Secrets and variables → Actions → Secrets.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays, 07:00 UTC
+  workflow_dispatch: # the button — run it whenever you want
+    inputs:
+      only:
+        description: "Comma-separated query ids to run (blank = all)"
+        required: false
+        default: ""
+      update_baseline:
+        description: "Save this run's numbers as the new baseline"
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  eval:
+    name: Run eval set
+    runs-on: ubuntu-latest
+    # Cold Groq + Tavily calls across 20 queries, plus a FlashRank model
+    # download on first use. Generous ceiling so a slow provider does not
+    # look like a failure.
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check secrets are present
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "::error::GROQ_API_KEY is not set — add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Run evaluation
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          # Config validation only; no auth happens on this path.
+          AUTH_SECRET: eval-run-not-used-for-auth
+          # No Redis in CI. The cache layer degrades to no-op on its own, which
+          # also means every run does real retrieval instead of replaying the
+          # previous one's search results.
+          REDIS_URL: redis://127.0.0.1:6379/0
+          ENVIRONMENT: ci
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.only }}" ]; then
+            ARGS="$ARGS --only ${{ github.event.inputs.only }}"
+          fi
+          if [ "${{ github.event.inputs.update_baseline }}" = "true" ]; then
+            ARGS="$ARGS --update-baseline"
+          fi
+          python -m evals.run_eval $ARGS
+
+      - name: Upload results
+        # Always upload: a failing run is exactly when the detail is wanted.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: backend/evals/results/latest.json
+          retention-days: 90
+
+      - name: Commit updated baseline
+        if: ${{ github.event.inputs.update_baseline == 'true' }}
+        run: |
+          if git diff --quiet -- evals/baseline.json; then
+            echo "Baseline unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evals/baseline.json
+          git commit -m "chore(evals): update baseline from scheduled run"
+          git push

@@ -26,6 +26,11 @@ out/
 build/
 dist/
 
+# ===== Eval harness =====
+# Per-run output. The committed baseline.json is the file that matters; results
+# are uploaded as a CI artifact instead of versioned.
+backend/evals/results/
+
 # ===== Logs / OS / Editor =====
 *.log
 npm-debug.log*

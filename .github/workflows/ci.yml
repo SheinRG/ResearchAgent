@@ -36,6 +36,17 @@ jobs:
           AUTH_SECRET: test-secret-not-used-in-ci
         run: python -m pytest -q
 
+      - name: Validate eval query set
+        # The eval harness itself runs weekly (eval.yml) because it needs real
+        # API keys. This step is the free half: it parses the query set and
+        # checks ids are unique and formats are legal, so a typo is caught on
+        # the PR that introduced it rather than the following Monday.
+        env:
+          GROQ_API_KEY: test
+          SERPER_API_KEY: test
+          AUTH_SECRET: test-secret-not-used-in-ci
+        run: python -m evals.run_eval --validate
+
   frontend:
     name: Frontend — build
     runs-on: ubuntu-latest

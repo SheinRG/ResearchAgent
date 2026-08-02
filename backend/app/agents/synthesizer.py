@@ -11,6 +11,7 @@ from datetime import date
 
 from app.services.llm import get_llm_client
 from app.utils.citations import build_cited_context, extract_citations_detailed
+from app.agents.messages import NO_SOURCES_MESSAGE, SYNTHESIS_ERROR_MESSAGE
 from app.agents.state import ResearchState, format_history
 from app.config import get_settings
 
@@ -173,11 +174,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
     # model to answer from nothing (which invites hallucination).
     if not cited_sources:
         logger.warning("Synthesizer: no sources available, returning fallback message")
-        message = (
-            "I couldn't find reliable sources to answer this question. "
-            "This can happen with very new, niche, or ambiguous topics — "
-            "try rephrasing the question or making it more specific."
-        )
+        message = NO_SOURCES_MESSAGE
         if sse_callback:
             await sse_callback("phase", {"phase": "writing", "message": "Synthesizing your answer..."})
             await sse_callback("token", {"token": message})
@@ -317,10 +314,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
     except Exception as e:
         logger.error("Synthesizer failed: %s", e)
         followup_task.cancel()
-        error_answer = (
-            "I encountered an error while generating the answer. "
-            "Please try again or rephrase your question."
-        )
+        error_answer = SYNTHESIS_ERROR_MESSAGE
         return {
             "draft_answer": error_answer,
             "citations": [],
