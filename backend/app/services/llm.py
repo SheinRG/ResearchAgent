@@ -36,6 +36,41 @@ logger = logging.getLogger(__name__)
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
+def stream_request_kwargs(
+    model: str,
+    messages: list[dict],
+    temperature: float,
+    max_tokens: int,
+) -> dict:
+    """
+    Build the arguments for a streaming completion.
+
+    Extracted so a test can check every key against the installed SDK's
+    signature. That guard exists because of a real outage: ``stream_options``
+    was passed as a top-level keyword, which groq 0.25.0's client does not
+    accept, and since a TypeError is not retryable every streamed synthesis
+    failed instantly. Mocked tests could not see it — the mock accepted any
+    keyword the real client would reject.
+
+    ``extra_body`` is the SDK's pass-through to the HTTP payload, so the option
+    reaches Groq's OpenAI-compatible API without the client needing to know
+    about it.
+
+    Worth knowing: Groq sends a usage-bearing final chunk even when this is not
+    requested. We ask anyway — the explicit request is the documented contract,
+    and relying on an undocumented convenience is how the counter silently
+    goes to zero later.
+    """
+    return {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+        "extra_body": {"stream_options": {"include_usage": True}},
+    }
+
+
 def _is_retryable(exc: Exception) -> bool:
     """Whether a Groq/httpx exception represents a transient, retryable failure."""
     if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError)):
@@ -232,15 +267,9 @@ class GroqClient:
             for attempt in range(self.max_retries + 1):
                 try:
                     stream = await self.client.chat.completions.create(
-                        model=resolved_model,
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=True,
-                        # Ask for a trailing usage chunk. Without this a streamed
-                        # call reports no token counts at all — and the synthesizer,
-                        # the most expensive call in the pipeline, is streamed.
-                        stream_options={"include_usage": True},
+                        **stream_request_kwargs(
+                            resolved_model, messages, temperature, max_tokens
+                        )
                     )
                     break
                 except Exception as e:
