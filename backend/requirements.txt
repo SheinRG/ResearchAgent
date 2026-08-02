@@ -44,6 +44,11 @@ python-dotenv==1.0.1
 # --- Observability (optional; active only when SENTRY_DSN is set) ---
 sentry-sdk[fastapi]==2.20.0
 
+# --- LLM tracing (optional; active only when LANGFUSE_*_KEY are set) ---
+# Pulls in the OpenTelemetry SDK. Adds ~25MB RSS, which matters on the 512MB
+# Render starter plan the blueprint targets — see render.yaml.
+langfuse==4.14.2
+
 # --- Testing ---
 pytest==8.3.4
 pytest-asyncio==0.24.0

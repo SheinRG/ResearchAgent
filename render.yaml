@@ -46,6 +46,16 @@ services:
       # Optional error tracking. Leave blank to disable; paste a Sentry DSN to enable.
       - key: SENTRY_DSN
         sync: false
+      # Optional LLM tracing (per-stage latency + token cost). Both keys must be
+      # set for it to activate; leave blank to disable. Note the SDK pulls in
+      # OpenTelemetry and costs ~25MB RSS — on the 512MB starter plan above that
+      # is affordable alongside the TinyBERT reranker, but not alongside MiniLM.
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_HOST
+        value: https://cloud.langfuse.com
       # MUST include your Vercel URL(s) as a JSON array, e.g.
       #   ["https://your-app.vercel.app"]
       - key: CORS_ORIGINS

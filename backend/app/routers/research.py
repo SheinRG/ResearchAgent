@@ -25,7 +25,8 @@ from app.services.answer_cache import (
     iter_replay_events,
     store_answer,
 )
-from app.services.usage import empty_usage, usage_scope
+from app.services import tracing
+from app.services.usage import current_usage, empty_usage, usage_scope
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +131,33 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 user_name=user_name,
                 model=settings.groq_synth_model,
             )
-            cached = await get_cached_answer(cache_key)
+            with tracing.span(
+                "answer-cache-lookup", input=tracing.preview(request.query)
+            ) as lookup_span:
+                cached = await get_cached_answer(cache_key)
+                lookup_span.update(output={"hit": bool(cached)})
+
             if cached:
                 logger.info("Answer cache HIT for: %s", request.query[:80])
+                # A hit still gets a `research` observation, so cached and live
+                # turns sit side by side in the dashboard and the hit rate is
+                # visible there as well as on /api/health. Opened and closed
+                # before any yield: the SSE generator can be finalized from a
+                # different task, and a span must not straddle that.
+                with tracing.request_scope(
+                    user_id=user_id, session_id=session_id, tags=["research", "cached"]
+                ):
+                    with tracing.span(
+                        "research",
+                        input=tracing.preview(request.query),
+                        metadata={"cached": True},
+                    ) as root_span:
+                        root_span.update(output={
+                            "answer": tracing.preview(cached.get("answer", "")),
+                            "sources": len(cached.get("sources", [])),
+                            "invalid_citations": cached.get("invalid_citations", 0),
+                            "cost_usd": 0.0,
+                        })
                 for event_type, data in iter_replay_events(cached):
                     yield _sse(event_type, data)
 
@@ -195,11 +220,42 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     "sse_callback": queue_callback,
                 }
                 accumulated: dict = {}
-                async for state in graph.astream(initial_state):
-                    if isinstance(state, dict):
-                        for node_output in state.values():
-                            if isinstance(node_output, dict):
-                                accumulated.update(node_output)
+                # The root span lives HERE, inside the task, rather than around
+                # the SSE generator: the generator's cleanup can run in a
+                # different asyncio context when a client disconnects, and an
+                # OpenTelemetry span cannot be closed from a foreign context.
+                # The whole graph runs within this one task, so every stage span
+                # nests under this root automatically.
+                with tracing.request_scope(
+                    user_id=user_id, session_id=session_id, tags=["research"]
+                ):
+                    with tracing.span(
+                        "research",
+                        input=tracing.preview(request.query),
+                        metadata={
+                            "cached": False,
+                            "has_documents": bool(request.documents),
+                            "history_turns": len(history),
+                        },
+                    ) as root_span:
+                        async for state in graph.astream(initial_state):
+                            if isinstance(state, dict):
+                                for node_output in state.values():
+                                    if isinstance(node_output, dict):
+                                        accumulated.update(node_output)
+
+                        spent = current_usage()
+                        root_span.update(output={
+                            "answer": tracing.preview(accumulated.get("draft_answer", "")),
+                            "mode": accumulated.get("mode", "research"),
+                            "sources": len(accumulated.get("all_sources") or []),
+                            "invalid_citations": accumulated.get("invalid_citations", 0),
+                            "confidence": accumulated.get("confidence", 0.0),
+                            # The cost of the whole turn, on the trace that owns
+                            # it — the per-stage split is on the child spans.
+                            "cost_usd": spent.as_dict()["cost_usd"] if spent else 0.0,
+                        })
+
                 await event_queue.put(("_final_state", accumulated))
             except Exception as e:
                 logger.error("Agent execution failed: %s", e)

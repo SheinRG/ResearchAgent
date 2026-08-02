@@ -101,11 +101,43 @@ Email/password works without any of this.
 
 ---
 
+## 6. Tracing on Langfuse (optional)
+
+Per-stage latency and token cost for every research run — triage, search,
+rerank, synthesis — with the LLM calls nested underneath as generations.
+
+1. Create a free project at [cloud.langfuse.com](https://cloud.langfuse.com)
+   (or self-host and point `LANGFUSE_HOST` at your own instance).
+2. Set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the Render dashboard.
+
+Both keys must be present or tracing stays off — the app runs exactly as before
+without them, the same way it does without a Sentry DSN. Confirm with
+`/api/health`, which reports `"tracing": "enabled" | "disabled"`.
+
+Two things worth knowing before you turn it on:
+
+- **Traces contain user questions and answers by default.** Set
+  `LANGFUSE_CAPTURE_CONTENT=false` to ship only timings, token counts and cost.
+  Account emails are never sent; traces are grouped by the internal user UUID.
+- **The SDK pulls in OpenTelemetry (~25MB RSS).** That fits the 512MB starter
+  plan alongside the TinyBERT reranker, but is another reason not to switch to
+  the MiniLM reranker on that plan.
+
+Costs are sent explicitly from the app's own price table
+(`app/services/usage.py`), because Langfuse's built-in pricing does not cover
+Groq's models — so the dashboard figure and the one in the UI always agree. If
+you change `GROQ_SYNTH_MODEL` to a model that table doesn't know, tokens are
+still counted but cost is reported as unknown rather than zero, and the backend
+logs a warning once.
+
+---
+
 ## Smoke test
 
 ```bash
 curl https://goon-backend.onrender.com/api/health
-# {"status":"healthy","llm":"connected","model":"llama-3.1-8b-instant"}
+# {"status":"healthy","llm":"connected","model":"llama-3.1-8b-instant",
+#  "answer_cache":{"hits":0,"misses":0,"hit_rate":0.0},"tracing":"disabled"}
 ```
 
 Then on the live site: register (password needs 8+ chars, 1 uppercase, 1 number)

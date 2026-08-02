@@ -16,6 +16,7 @@ from app.services.answer_cache import cache_stats
 from app.services.cache import close_redis, get_redis
 from app.services.scraper import close_scraper
 from app.services.tavily import close_tavily
+from app.services.tracing import init_tracing, is_enabled as tracing_enabled, shutdown_tracing
 from app.routers import auth, research, sessions, upload, notes, files
 
 logging.basicConfig(
@@ -63,6 +64,10 @@ async def lifespan(app: FastAPI):
             + "=" * 70
         )
 
+    # Before anything that makes LLM calls, so the startup health check and the
+    # first request are both covered.
+    init_tracing()
+
     try:
         await init_db()
         logger.info("Database initialized")
@@ -85,6 +90,9 @@ async def lifespan(app: FastAPI):
     await close_tavily()
     await close_redis()
     await close_db()
+    # Last: flush buffered observations, including any recorded while the other
+    # clients were closing.
+    shutdown_tracing()
     logger.info("Backend shutdown complete")
 
 
@@ -166,5 +174,6 @@ async def health_check():
         "database": "connected" if db_ok else "disconnected",
         "redis": "connected" if redis_ok else "unavailable",
         "answer_cache": answer_cache,
+        "tracing": "enabled" if tracing_enabled() else "disabled",
     }
     return JSONResponse(content=body, status_code=200 if db_ok else 503)

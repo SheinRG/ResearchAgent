@@ -20,6 +20,7 @@ import httpx
 from groq import AsyncGroq
 
 from app.config import get_settings
+from app.services import tracing
 
 # TokenUsage/UsageCallback live in services.usage — the accounting module owns
 # the accounting type. Re-exported here so callers can keep importing them from
@@ -150,24 +151,40 @@ class GroqClient:
         if format_json:
             kwargs["response_format"] = {"type": "json_object"}
 
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = await self.client.chat.completions.create(**kwargs)
-                self._record_usage(
-                    stage, kwargs["model"], getattr(response, "usage", None), on_usage
-                )
-                return response.choices[0].message.content or ""
-            except Exception as e:
-                if attempt < self.max_retries and _is_retryable(e):
-                    delay = self.retry_base_delay * (2 ** attempt)
-                    logger.warning(
-                        "Groq generate attempt %d/%d failed (%s); retrying in %.1fs",
-                        attempt + 1, self.max_retries + 1, e, delay,
+        # One observation spans the whole retry loop: the caller waited for all
+        # of it, so that is the latency worth recording. Retries show up in the
+        # metadata rather than as separate generations.
+        with tracing.generation(
+            stage or "llm",
+            model=kwargs["model"],
+            input=tracing.preview(prompt),
+            metadata={"temperature": temperature, "json_mode": format_json},
+        ) as observation:
+            for attempt in range(self.max_retries + 1):
+                try:
+                    response = await self.client.chat.completions.create(**kwargs)
+                    usage = self._record_usage(
+                        stage, kwargs["model"], getattr(response, "usage", None), on_usage
                     )
-                    await asyncio.sleep(delay)
-                    continue
-                logger.error("Groq request failed: %s", e)
-                raise
+                    content = response.choices[0].message.content or ""
+                    observation.update(
+                        output=tracing.preview(content),
+                        usage_details=tracing.usage_details(usage),
+                        cost_details=tracing.cost_details(usage),
+                        metadata={"attempts": attempt + 1},
+                    )
+                    return content
+                except Exception as e:
+                    if attempt < self.max_retries and _is_retryable(e):
+                        delay = self.retry_base_delay * (2 ** attempt)
+                        logger.warning(
+                            "Groq generate attempt %d/%d failed (%s); retrying in %.1fs",
+                            attempt + 1, self.max_retries + 1, e, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    logger.error("Groq request failed: %s", e)
+                    raise
 
     async def generate_stream(
         self,
@@ -201,54 +218,69 @@ class GroqClient:
 
         resolved_model = model or self.model
 
-        # Retry only while establishing the stream. Once tokens have started
-        # flowing we can't safely restart without duplicating output.
-        stream = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                stream = await self.client.chat.completions.create(
-                    model=resolved_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    stream=True,
-                    # Ask for a trailing usage chunk. Without this a streamed
-                    # call reports no token counts at all — and the synthesizer,
-                    # the most expensive call in the pipeline, is streamed.
-                    stream_options={"include_usage": True},
-                )
-                break
-            except Exception as e:
-                if attempt < self.max_retries and _is_retryable(e):
-                    delay = self.retry_base_delay * (2 ** attempt)
-                    logger.warning(
-                        "Groq stream setup attempt %d/%d failed (%s); retrying in %.1fs",
-                        attempt + 1, self.max_retries + 1, e, delay,
+        # The observation spans stream setup AND consumption, so its duration is
+        # time-to-last-token — the number that actually describes this call.
+        with tracing.generation(
+            stage or "llm",
+            model=resolved_model,
+            input=tracing.preview(prompt),
+            metadata={"temperature": temperature, "streamed": True},
+        ) as observation:
+            # Retry only while establishing the stream. Once tokens have started
+            # flowing we can't safely restart without duplicating output.
+            stream = None
+            for attempt in range(self.max_retries + 1):
+                try:
+                    stream = await self.client.chat.completions.create(
+                        model=resolved_model,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=True,
+                        # Ask for a trailing usage chunk. Without this a streamed
+                        # call reports no token counts at all — and the synthesizer,
+                        # the most expensive call in the pipeline, is streamed.
+                        stream_options={"include_usage": True},
                     )
-                    await asyncio.sleep(delay)
-                    continue
-                logger.error("Groq stream failed: %s", e)
-                raise
+                    break
+                except Exception as e:
+                    if attempt < self.max_retries and _is_retryable(e):
+                        delay = self.retry_base_delay * (2 ** attempt)
+                        logger.warning(
+                            "Groq stream setup attempt %d/%d failed (%s); retrying in %.1fs",
+                            attempt + 1, self.max_retries + 1, e, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    logger.error("Groq stream failed: %s", e)
+                    raise
 
-        raw_usage = None
-        try:
-            async for chunk in stream:
-                # The usage chunk arrives last and carries an EMPTY choices list,
-                # so choices must be checked before indexing it.
-                if getattr(chunk, "usage", None) is not None:
-                    raw_usage = chunk.usage
-                if not chunk.choices:
-                    continue
-                token = chunk.choices[0].delta.content
-                if token:
-                    yield token
-        except Exception as e:
-            logger.error("Groq stream interrupted mid-flight: %s", e)
-            raise
-        finally:
-            # Report whatever usage arrived, even if the stream broke partway —
-            # a failed expensive call still cost tokens worth knowing about.
-            self._record_usage(stage, resolved_model, raw_usage, on_usage)
+            raw_usage = None
+            collected: list[str] = []
+            try:
+                async for chunk in stream:
+                    # The usage chunk arrives last and carries an EMPTY choices list,
+                    # so choices must be checked before indexing it.
+                    if getattr(chunk, "usage", None) is not None:
+                        raw_usage = chunk.usage
+                    if not chunk.choices:
+                        continue
+                    token = chunk.choices[0].delta.content
+                    if token:
+                        collected.append(token)
+                        yield token
+            except Exception as e:
+                logger.error("Groq stream interrupted mid-flight: %s", e)
+                raise
+            finally:
+                # Report whatever usage arrived, even if the stream broke partway —
+                # a failed expensive call still cost tokens worth knowing about.
+                usage = self._record_usage(stage, resolved_model, raw_usage, on_usage)
+                observation.update(
+                    output=tracing.preview("".join(collected)),
+                    usage_details=tracing.usage_details(usage),
+                    cost_details=tracing.cost_details(usage),
+                )
 
     async def generate_structured(
         self,

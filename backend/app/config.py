@@ -119,6 +119,23 @@ class Settings(BaseSettings):
     environment: str = "development"        # tags Sentry events, e.g. "production"
     sentry_traces_sample_rate: float = 0.0  # 0 = capture errors only, no perf tracing
 
+    # --- Langfuse tracing (optional) ---
+    # Per-stage latency and token cost for the research pipeline. Enabled only
+    # when BOTH keys are set; blank = disabled (no-op), same as Sentry above.
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"  # self-hosted: your own URL
+    # Fraction of traces recorded. 1.0 is fine at this traffic level; lower it
+    # if the free tier's event quota becomes the constraint.
+    langfuse_sample_rate: float = 1.0
+    # False sends only timings, token counts and counts-of-things — no prompts,
+    # no answers, no source text. Traces stay useful for latency and cost work
+    # while carrying none of the user's content.
+    langfuse_capture_content: bool = True
+    # Prompts carry the full text of every scraped source. Truncate before
+    # shipping: nobody reads 40KB in a trace viewer, and it is billed volume.
+    langfuse_max_content_chars: int = 2000
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

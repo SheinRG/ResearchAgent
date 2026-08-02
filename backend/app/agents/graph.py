@@ -10,7 +10,7 @@ round-trip and no separate planner call.
 """
 
 import logging
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.graph.state import CompiledStateGraph
 
@@ -19,8 +19,65 @@ from app.agents.router import router_node
 from app.agents.conversational import conversational_node
 from app.agents.researcher import researcher_node, rerank_node
 from app.agents.synthesizer import synthesizer_node
+from app.services import tracing
 
 logger = logging.getLogger(__name__)
+
+NodeFn = Callable[[ResearchState], Awaitable[dict]]
+
+
+# What each stage is worth recording. Deliberately counts and sizes rather than
+# payloads: the full state carries every scraped chunk, which is megabytes of
+# noise in a trace viewer. Answer/query text arrives via the LLM generations
+# nested inside these spans, and is subject to langfuse_capture_content there.
+_STAGE_OUTPUT: dict[str, Callable[[dict], dict]] = {
+    "triage": lambda out: {
+        "mode": out.get("mode"),
+        "sub_queries": len(out.get("sub_queries") or []),
+        "answer_format": (out.get("answer_format") or {}).get("type"),
+        "needs_web": out.get("needs_web"),
+    },
+    "search": lambda out: {
+        "sources": len(out.get("search_results") or []),
+        "chunks": len(out.get("scraped_content") or []),
+        "document_chunks": len(out.get("document_chunks") or []),
+        "images": len(out.get("images") or []),
+    },
+    "rerank": lambda out: {
+        "ranked_chunks": len(out.get("ranked_chunks") or []),
+        "top_score": round((out.get("ranked_chunks") or [{}])[0].get("score", 0.0), 4),
+    },
+    "synthesize": lambda out: {
+        "answer_chars": len(out.get("draft_answer") or ""),
+        "citations": len(out.get("citations") or []),
+        "invalid_citations": out.get("invalid_citations", 0),
+        "confidence": out.get("confidence", 0.0),
+        "follow_ups": len(out.get("follow_up_suggestions") or []),
+    },
+    "chat": lambda out: {"answer_chars": len(out.get("draft_answer") or "")},
+}
+
+
+def _traced(stage: str, node: NodeFn) -> NodeFn:
+    """
+    Wrap a graph node so its wall time and result shape land in a span.
+
+    Done here rather than inside the nodes so the agent code stays free of
+    observability plumbing, and so no future node can be added without a
+    deliberate decision about how it is traced.
+    """
+
+    async def traced_node(state: ResearchState) -> dict:
+        with tracing.span(stage) as observation:
+            result = await node(state)
+            try:
+                observation.update(output=_STAGE_OUTPUT[stage](result))
+            except Exception as e:  # a summariser must never break the pipeline
+                logger.debug("Stage summary failed for %s (ignored): %s", stage, e)
+            return result
+
+    traced_node.__name__ = getattr(node, "__name__", stage)
+    return traced_node
 
 
 def route_mode(state: ResearchState) -> str:
@@ -40,12 +97,13 @@ def build_research_graph() -> StateGraph:
     """
     graph = StateGraph(ResearchState)
 
-    # Add nodes
-    graph.add_node("router", router_node)
-    graph.add_node("conversational", conversational_node)
-    graph.add_node("researcher", researcher_node)
-    graph.add_node("reranker", rerank_node)
-    graph.add_node("synthesizer", synthesizer_node)
+    # Add nodes. Each is wrapped so the stage shows up as its own span with its
+    # own latency; the LLM calls inside nest underneath as generations.
+    graph.add_node("router", _traced("triage", router_node))
+    graph.add_node("conversational", _traced("chat", conversational_node))
+    graph.add_node("researcher", _traced("search", researcher_node))
+    graph.add_node("reranker", _traced("rerank", rerank_node))
+    graph.add_node("synthesizer", _traced("synthesize", synthesizer_node))
 
     # Triage first: a casual/simple message gets a direct chat reply; a genuine
     # research question goes straight into the pipeline (sub-queries were already
