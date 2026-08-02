@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.models.database import init_db, close_db, get_engine
 from app.services.llm import get_llm_client
+from app.services.answer_cache import cache_stats
 from app.services.cache import close_redis, get_redis
 from app.services.scraper import close_scraper
 from app.services.tavily import close_tavily
@@ -145,12 +146,17 @@ async def health_check():
     Postgres is critical (auth + sessions depend on it), so the endpoint returns
     503 when the DB is down — telling the platform's health check the instance is
     not ready. The LLM and Redis are reported but treated as degraded-not-fatal.
+
+    Also reports lifetime answer-cache hit/miss tallies. The cache short-circuits
+    the whole pipeline, so its hit rate is the single number that says whether it
+    is earning its keep; without this it is invisible.
     """
     llm = get_llm_client()
-    llm_ok, db_ok, redis_ok = await asyncio.gather(
+    llm_ok, db_ok, redis_ok, answer_cache = await asyncio.gather(
         llm.health_check(),
         _check_db(),
         _check_redis(),
+        cache_stats(),
     )
 
     body = {
@@ -159,5 +165,6 @@ async def health_check():
         "model": llm.model,
         "database": "connected" if db_ok else "disconnected",
         "redis": "connected" if redis_ok else "unavailable",
+        "answer_cache": answer_cache,
     }
     return JSONResponse(content=body, status_code=200 if db_ok else 503)

@@ -170,3 +170,15 @@ class TestCachedStateForSave:
         assert state["draft_answer"] == "x"
         assert state["all_sources"] == []
         assert state["confidence"] == 0.0
+
+    def test_entry_cached_before_integrity_tracking_reads_as_clean(self):
+        """
+        Payloads stored before invalid_citations existed have no such key. They
+        must read as 0 — the same value a healthy answer reports — rather than
+        raising or surfacing as a phantom warning in the UI.
+        """
+        assert cached_state_for_save({"answer": "x"})["invalid_citations"] == 0
+
+    def test_carries_integrity_count_through_a_replay(self):
+        payload = dict(FULL_PAYLOAD, invalid_citations=2)
+        assert cached_state_for_save(payload)["invalid_citations"] == 2

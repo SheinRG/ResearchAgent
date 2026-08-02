@@ -108,6 +108,9 @@ class ResearchState(TypedDict, total=False):
     # --- Synthesizer Output ---
     draft_answer: str                                   # Current synthesized answer
     citations: list[dict]                               # Extracted citations
+    # Count of [n] markers pointing at a source the model was never given — the
+    # clearest fabrication signal available. 0 is the healthy case.
+    invalid_citations: int
     all_sources: list[dict]                             # Flattened unique sources for UI
 
     # --- Reflector Output ---

@@ -5,42 +5,34 @@ with exponential-backoff retries on transient failures.
 
 Every call reports its token usage: each method takes a ``stage`` label (which
 pipeline step is spending the tokens) and an optional ``on_usage`` callback.
-Usage is always logged; the callback is the seam a tracing backend hooks into
-without this module having to know about it.
+Usage is always logged, and is always handed to ``services.usage``, which sums
+it for the request in flight. The per-call ``on_usage`` callback is the extra
+seam a tracing backend hooks into without this module having to know about it.
 """
 
 import json
 import time
 import asyncio
 import logging
-from dataclasses import dataclass
-from typing import AsyncGenerator, Callable, Optional
+from typing import AsyncGenerator, Optional
 
 import httpx
 from groq import AsyncGroq
 
 from app.config import get_settings
 
+# TokenUsage/UsageCallback live in services.usage — the accounting module owns
+# the accounting type. Re-exported here so callers can keep importing them from
+# the client that produces them.
+from app.services.usage import TokenUsage, UsageCallback, record_usage
+
+__all__ = ["GroqClient", "TokenUsage", "UsageCallback", "get_llm_client"]
+
 logger = logging.getLogger(__name__)
 
 # HTTP statuses worth retrying — transient server/throttling errors only.
 # 4xx like 400/401/404 are permanent and must NOT be retried.
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
-
-
-@dataclass(frozen=True)
-class TokenUsage:
-    """Token accounting for a single LLM call, attributed to a pipeline stage."""
-    stage: str
-    model: str
-    prompt_tokens: int
-    completion_tokens: int
-    total_tokens: int
-
-
-# A usage observer. Kept synchronous on purpose: it is invoked from inside the
-# streaming loop, so it must never await or it would stall token delivery.
-UsageCallback = Callable[[TokenUsage], None]
 
 
 def _is_retryable(exc: Exception) -> bool:
@@ -81,7 +73,8 @@ class GroqClient:
         on_usage: Optional[UsageCallback],
     ) -> Optional[TokenUsage]:
         """
-        Log a call's token usage and hand it to the observer, if any.
+        Log a call's token usage, add it to the request total, and hand it to
+        the per-call observer, if any.
 
         ``raw_usage`` is the SDK's usage object (or None when the API omitted
         it). Never raises: token accounting must not be able to fail a request.
@@ -102,6 +95,10 @@ class GroqClient:
             usage.stage, usage.model,
             usage.prompt_tokens, usage.completion_tokens, usage.total_tokens,
         )
+
+        # Ambient accounting first: it is a no-op outside a request scope and
+        # cannot raise, so it runs regardless of what the caller passed.
+        record_usage(usage)
 
         if on_usage is not None:
             try:

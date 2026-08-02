@@ -104,26 +104,32 @@ def _source_field(source, field: str) -> str:
     return getattr(source, field, "")
 
 
-def extract_citations(
+def extract_citations_detailed(
     text: str,
     sources: list,
-) -> list[Citation]:
+) -> tuple[list[Citation], list[int]]:
     """
-    Extract citation markers from text and map them to source URLs.
+    Extract citation markers from text and map them to source URLs, reporting
+    any markers that point at a source the model was never given.
 
     The ``sources`` list must use the same ordering that was presented to the
     model (see :func:`build_cited_context`), so marker ``[i]`` resolves to
     ``sources[i - 1]``.
+
+    A marker outside that range — a ``[7]`` in an answer built from 4 sources —
+    is the clearest fabrication signal available, so it is returned to the
+    caller rather than only logged. Callers surface the count to the user and
+    persist it with the answer.
 
     Args:
         text: The generated answer text containing [1], [2] markers.
         sources: Canonical ordered sources (dicts or SearchResult objects).
 
     Returns:
-        List of Citation objects for all valid markers found.
+        Tuple of (citations for valid markers, sorted unique invalid markers).
     """
     if not text or not sources:
-        return []
+        return [], []
 
     # Find all citation indices in the text
     matches = CITATION_PATTERN.findall(text)
@@ -132,7 +138,7 @@ def extract_citations(
     # Markers pointing at a source number that was never given to the model.
     # These are dropped from the returned citations, but they are the clearest
     # signal available that the model invented a reference, so they are counted
-    # and reported rather than discarded silently.
+    # and returned rather than discarded silently.
     invalid_indices: list[int] = []
 
     for match in matches:
@@ -160,13 +166,14 @@ def extract_citations(
         except (ValueError, IndexError):
             continue
 
-    if invalid_indices:
+    unique_invalid = sorted(set(invalid_indices))
+    if unique_invalid:
         logger.warning(
             "Answer cited %d marker(s) with no matching source (valid range 1-%d): %s "
             "— possible fabricated citation",
             len(invalid_indices),
             len(sources),
-            sorted(set(invalid_indices)),
+            unique_invalid,
         )
 
     logger.info(
@@ -174,6 +181,20 @@ def extract_citations(
         len(citations),
         len(invalid_indices),
     )
+    return citations, unique_invalid
+
+
+def extract_citations(
+    text: str,
+    sources: list,
+) -> list[Citation]:
+    """
+    Extract citation markers from text and map them to source URLs.
+
+    Thin wrapper over :func:`extract_citations_detailed` for callers that only
+    need the resolved citations and not the fabrication signal.
+    """
+    citations, _invalid = extract_citations_detailed(text, sources)
     return citations
 
 

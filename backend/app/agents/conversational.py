@@ -81,6 +81,7 @@ async def conversational_node(state: ResearchState) -> dict:
     return {
         "draft_answer": full_answer,
         "citations": [],
+        "invalid_citations": 0,
         "all_sources": [],
         "follow_up_suggestions": [],
         "confidence": 1.0,

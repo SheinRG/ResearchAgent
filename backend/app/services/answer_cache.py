@@ -28,12 +28,17 @@ import hashlib
 import logging
 from typing import Any, Optional
 
-from app.services.cache import cache_get, cache_set
+from app.services.cache import cache_get, cache_set, counter_incr, counters_get
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 _PREFIX = "answer"
+
+# Hit/miss tallies. Without these the cache is unfalsifiable: it either saves a
+# lot of money or none at all, and the logs alone never say which.
+_HITS = "answer_cache_hits"
+_MISSES = "answer_cache_misses"
 
 # Bump to invalidate every cached answer at once — required whenever a prompt,
 # the source-formatting, or the event contract below changes, since old entries
@@ -105,13 +110,30 @@ def is_cacheable(final_state: dict, has_documents: bool) -> bool:
 
 
 async def get_cached_answer(key: str) -> Optional[dict]:
-    """Look up a stored answer payload. Returns None on miss or malformed entry."""
+    """
+    Look up a stored answer payload. Returns None on miss or malformed entry.
+
+    Every lookup is tallied, so the denominator is "requests eligible for the
+    cache" — uploads and disabled-cache runs never reach here and correctly do
+    not count against the hit rate.
+    """
     payload = await cache_get(_PREFIX, key)
-    if not isinstance(payload, dict):
-        return None
-    if not (payload.get("answer") or "").strip():
-        return None
-    return payload
+    hit = isinstance(payload, dict) and bool((payload.get("answer") or "").strip())
+    await counter_incr(_HITS if hit else _MISSES)
+    return payload if hit else None
+
+
+async def cache_stats() -> dict:
+    """Lifetime hit/miss tallies plus the derived rate, for the health endpoint."""
+    counts = await counters_get([_HITS, _MISSES])
+    hits = counts.get(_HITS, 0)
+    misses = counts.get(_MISSES, 0)
+    total = hits + misses
+    return {
+        "hits": hits,
+        "misses": misses,
+        "hit_rate": round(hits / total, 3) if total else 0.0,
+    }
 
 
 async def store_answer(key: str, final_state: dict) -> None:
@@ -124,6 +146,7 @@ async def store_answer(key: str, final_state: dict) -> None:
         "sub_queries": final_state.get("sub_queries", []),
         "follow_ups": final_state.get("follow_up_suggestions", []),
         "citations": final_state.get("citations", []),
+        "invalid_citations": final_state.get("invalid_citations", 0),
         "confidence": final_state.get("confidence", 0.0),
     }
     await cache_set(_PREFIX, key, payload, ttl=settings.answer_cache_ttl)
@@ -183,6 +206,9 @@ def cached_state_for_save(payload: dict) -> dict[str, Any]:
         "all_sources": payload.get("sources", []),
         "sub_queries": payload.get("sub_queries", []),
         "citations": payload.get("citations", []),
+        # Entries cached before this field existed read as 0, which is the same
+        # thing a healthy answer reports.
+        "invalid_citations": payload.get("invalid_citations", 0),
         "confidence": payload.get("confidence", 0.0),
         "follow_up_suggestions": payload.get("follow_ups", []),
         "iteration": 1,

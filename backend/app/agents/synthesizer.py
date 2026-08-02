@@ -10,7 +10,7 @@ import logging
 from datetime import date
 
 from app.services.llm import get_llm_client
-from app.utils.citations import build_cited_context, extract_citations
+from app.utils.citations import build_cited_context, extract_citations_detailed
 from app.agents.state import ResearchState, format_history
 from app.config import get_settings
 
@@ -184,6 +184,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
         return {
             "draft_answer": message,
             "citations": [],
+            "invalid_citations": 0,
             "all_sources": [],
             "phase": "writing",
         }
@@ -283,7 +284,10 @@ async def synthesizer_node(state: ResearchState) -> dict:
                 await sse_callback("token", {"token": token})
 
         # Citations resolve against the SAME canonical list shown to the model.
-        citations = extract_citations(full_answer, cited_sources)
+        # Markers outside that list are counted separately: they mean the model
+        # referenced a source it was never given, which travels to the UI and
+        # the stored turn as an integrity signal.
+        citations, invalid_markers = extract_citations_detailed(full_answer, cited_sources)
         citation_dicts = [c.model_dump() for c in citations]
 
         # The follow-up call has been running alongside the stream; collect it
@@ -293,13 +297,16 @@ async def synthesizer_node(state: ResearchState) -> dict:
             await sse_callback("follow_up", {"suggestions": follow_ups})
 
         logger.info(
-            "Synthesizer: generated %d char answer, %d sources, %d citations, %d follow-ups",
-            len(full_answer), len(cited_sources), len(citation_dicts), len(follow_ups),
+            "Synthesizer: generated %d char answer, %d sources, %d citations, "
+            "%d invalid marker(s), %d follow-ups",
+            len(full_answer), len(cited_sources), len(citation_dicts),
+            len(invalid_markers), len(follow_ups),
         )
 
         return {
             "draft_answer": full_answer,
             "citations": citation_dicts,
+            "invalid_citations": len(invalid_markers),
             "all_sources": cited_sources,
             "follow_up_suggestions": follow_ups,
             "confidence": confidence,
@@ -317,6 +324,7 @@ async def synthesizer_node(state: ResearchState) -> dict:
         return {
             "draft_answer": error_answer,
             "citations": [],
+            "invalid_citations": 0,
             "all_sources": cited_sources,
             "follow_up_suggestions": [],
             "confidence": confidence,

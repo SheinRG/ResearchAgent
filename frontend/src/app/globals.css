@@ -1415,6 +1415,23 @@ body::before {
     color: var(--accent);
 }
 
+.done-cost {
+    cursor: help;
+}
+
+.done-cached {
+    color: var(--success);
+    cursor: help;
+}
+
+.done-warning {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--warning);
+    cursor: help;
+}
+
 .done-model {
     margin-left: auto;
     opacity: 0.6;

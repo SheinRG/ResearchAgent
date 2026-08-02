@@ -8,6 +8,7 @@ import pytest
 from app.utils.chunker import chunk_text, _force_split
 from app.utils.citations import (
     extract_citations,
+    extract_citations_detailed,
     _extract_claim_context,
     build_cited_context,
     CITATION_PATTERN,
@@ -220,6 +221,63 @@ class TestExtractCitations:
         text = "No citations here at all."
         citations = extract_citations(text, SAMPLE_SOURCES)
         assert citations == []
+
+
+# ===========================================================================
+# extract_citations_detailed — the fabrication signal
+# ===========================================================================
+
+class TestExtractCitationsDetailed:
+    """
+    A marker pointing outside the source list means the model referenced
+    something it was never shown. It is dropped from the citations either way;
+    these tests cover that it is also *reported*, which is what reaches the UI
+    and the stored turn.
+    """
+
+    def test_clean_answer_reports_no_invalid_markers(self):
+        citations, invalid = extract_citations_detailed(
+            "Fact one [1]. Fact two [2].", SAMPLE_SOURCES
+        )
+        assert len(citations) == 2
+        assert invalid == []
+
+    def test_out_of_range_marker_is_reported(self):
+        citations, invalid = extract_citations_detailed(
+            "A real claim [1]. An invented one [7].", SAMPLE_SOURCES
+        )
+        assert [c.index for c in citations] == [1]
+        assert invalid == [7]
+
+    def test_zero_marker_is_reported_as_invalid(self):
+        _citations, invalid = extract_citations_detailed(
+            "Citation [0] is not 1-based.", SAMPLE_SOURCES
+        )
+        assert invalid == [0]
+
+    def test_invalid_markers_are_deduplicated_and_sorted(self):
+        _citations, invalid = extract_citations_detailed(
+            "Bad [9]. Worse [7]. Again [9].", SAMPLE_SOURCES
+        )
+        assert invalid == [7, 9]
+
+    def test_boundary_marker_is_valid(self):
+        """[3] against exactly 3 sources is the last valid marker, not invalid."""
+        citations, invalid = extract_citations_detailed(
+            "Edge case [3].", SAMPLE_SOURCES
+        )
+        assert [c.index for c in citations] == [3]
+        assert invalid == []
+
+    def test_empty_inputs_report_nothing(self):
+        assert extract_citations_detailed("", SAMPLE_SOURCES) == ([], [])
+        assert extract_citations_detailed("Text [1]", []) == ([], [])
+
+    def test_wrapper_matches_detailed_citations(self):
+        """extract_citations must stay a pure projection of the detailed call."""
+        text = "One [1]. Two [2]. Fake [42]."
+        citations, _invalid = extract_citations_detailed(text, SAMPLE_SOURCES)
+        assert extract_citations(text, SAMPLE_SOURCES) == citations
 
 
 # ===========================================================================

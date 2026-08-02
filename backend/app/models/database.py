@@ -68,6 +68,11 @@ class ResearchQuery(Base):
     iterations = Column(Integer, default=1)
     follow_up_suggestions = Column(JSON, default=list)
     documents = Column(JSON, default=list)
+    # Answer-quality and cost signals, recorded per turn so they can be
+    # aggregated later (which questions cost the most, which fabricate).
+    invalid_citations = Column(Integer, default=0)   # [n] markers with no such source
+    total_tokens = Column(Integer, default=0)        # across every LLM call in the turn
+    cost_usd = Column(Float, default=0.0)            # estimated; see services.usage
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     session = relationship("ResearchSession", back_populates="queries")
@@ -238,6 +243,15 @@ async def init_db() -> None:
             )
             await conn.execute(
                 text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS documents JSON")
+            )
+            await conn.execute(
+                text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS invalid_citations INTEGER DEFAULT 0")
+            )
+            await conn.execute(
+                text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS total_tokens INTEGER DEFAULT 0")
+            )
+            await conn.execute(
+                text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION DEFAULT 0")
             )
         logger.info("Database tables created successfully")
     except Exception as e:

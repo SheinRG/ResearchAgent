@@ -185,6 +185,14 @@ class DoneEvent(BaseModel):
     total_sources: int = 0
     iterations: int = 1
     confidence: float = 0.0
+    # [n] markers in the answer with no matching source — 0 is the healthy case.
+    invalid_citations: int = 0
+    model: str = ""
+    latency_ms: int = 0
+    cached: bool = False
+    # Token totals + estimated cost for the turn; all zeros on a cache hit.
+    # Shape mirrors services.usage.UsageAccumulator.as_dict().
+    usage: dict = Field(default_factory=dict)
 
 
 class SessionResponse(BaseModel):

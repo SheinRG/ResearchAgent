@@ -35,6 +35,24 @@ function toPlainText(md = "") {
     .trim();
 }
 
+/** Compact token count: 4820 → "4.8k". */
+function formatTokens(n = 0) {
+  if (n < 1000) return `${n}`;
+  return `${(n / 1000).toFixed(1)}k`;
+}
+
+/**
+ * Format an estimated cost in USD. A research turn costs fractions of a cent,
+ * so a fixed 2dp would render every answer as "$0.00" — the precision scales
+ * down with the number instead.
+ */
+function formatCost(usd = 0) {
+  if (!usd) return "$0";
+  if (usd < 0.001) return `$${usd.toFixed(5)}`;
+  if (usd < 1) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
 /** Copy-to-clipboard button with a transient "Copied" flash. */
 function CopyButton({ text, title = "Copy", size = 14, clean = false }) {
   const [copied, setCopied] = useState(false);
@@ -185,6 +203,47 @@ export default function ResearchTurn({
             {doneData.iterations || 1}{" "}
             {(doneData.iterations || 1) === 1 ? "iteration" : "iterations"}
           </span>
+
+          {/* Cost of the turn. A cache hit made no LLM calls at all, so it
+              reports the saving instead of a zeroed token count. */}
+          {doneData.cached ? (
+            <>
+              <span className="done-separator">/</span>
+              <span className="done-cached" title="Replayed from the answer cache — no model calls were made">
+                cached · $0
+              </span>
+            </>
+          ) : (
+            doneData.usage?.total_tokens > 0 && (
+              <>
+                <span className="done-separator">/</span>
+                <span
+                  className="done-cost"
+                  title={`${doneData.usage.prompt_tokens} prompt + ${doneData.usage.completion_tokens} completion tokens across ${doneData.usage.calls} model call(s) — estimated cost`}
+                >
+                  {formatTokens(doneData.usage.total_tokens)} tokens ·{" "}
+                  {formatCost(doneData.usage.cost_usd)}
+                </span>
+              </>
+            )
+          )}
+
+          {/* Citation integrity: the answer referenced a source number that was
+              never given to the model. Rare, and worth surfacing when it happens. */}
+          {doneData.invalid_citations > 0 && (
+            <>
+              <span className="done-separator">/</span>
+              <span
+                className="done-warning"
+                title="The answer used citation markers that don't match any retrieved source. Treat those claims with extra caution."
+              >
+                <AlertIcon width={12} height={12} />
+                {doneData.invalid_citations} unmatched citation
+                {doneData.invalid_citations === 1 ? "" : "s"}
+              </span>
+            </>
+          )}
+
           {doneData.model && (
             <>
               <span className="done-separator">/</span>

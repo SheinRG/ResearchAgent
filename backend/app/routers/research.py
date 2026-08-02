@@ -25,6 +25,7 @@ from app.services.answer_cache import (
     iter_replay_events,
     store_answer,
 )
+from app.services.usage import empty_usage, usage_scope
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,14 @@ def _sse(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
-async def _save_session(session_id: str, query: str, final_state: dict, user_id: str = "", documents: list | None = None) -> None:
+async def _save_session(
+    session_id: str,
+    query: str,
+    final_state: dict,
+    user_id: str = "",
+    documents: list | None = None,
+    usage: dict | None = None,
+) -> None:
     try:
         factory = get_session_factory()
         async with factory() as db:
@@ -69,6 +77,9 @@ async def _save_session(session_id: str, query: str, final_state: dict, user_id:
                 iterations=final_state.get("iteration", 1),
                 follow_up_suggestions=final_state.get("follow_up_suggestions", []),
                 documents=documents or [],
+                invalid_citations=final_state.get("invalid_citations", 0),
+                total_tokens=(usage or {}).get("total_tokens", 0),
+                cost_usd=(usage or {}).get("cost_usd", 0.0),
             )
             db.add(research_query)
             await db.commit()
@@ -133,6 +144,7 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     final_state=cached_state_for_save(cached),
                     user_id=user_id,
                     documents=stored_documents,
+                    usage=empty_usage(),
                 ))
 
                 yield _sse("done", {
@@ -140,9 +152,14 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     "total_sources": len(cached.get("sources", [])),
                     "iterations": 1,
                     "confidence": cached.get("confidence", 0.0),
+                    "invalid_citations": cached.get("invalid_citations", 0),
                     "model": settings.groq_synth_model,
                     "latency_ms": int((time.monotonic() - start_time) * 1000),
                     "cached": True,
+                    # A replayed answer makes no LLM calls at all. Reporting
+                    # real zeros (rather than omitting the field) is the point:
+                    # it is what makes the cache's saving visible.
+                    "usage": empty_usage(),
                 })
                 return
 
@@ -189,47 +206,61 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 await event_queue.put(("error", {"message": str(e)}))
                 await event_queue.put(("_final_state", {"error": str(e)}))
 
-        agent_task = asyncio.create_task(run_agent())
-        try:
-            while True:
-                event_type, data = await asyncio.wait_for(event_queue.get(), timeout=300)
-                if event_type == "_final_state":
-                    final = data
-                    done_data = {
-                        "session_id": session_id,
-                        "total_sources": len(final.get("all_sources", final.get("search_results", []))),
-                        "iterations": final.get("iteration", 1),
-                        "confidence": final.get("confidence", 0.0),
-                        "model": settings.groq_synth_model,
-                        "latency_ms": int((time.monotonic() - start_time) * 1000),
-                        "cached": False,
-                    }
+        # Collect token usage for every LLM call this request makes. Entered
+        # BEFORE the graph task is spawned: asyncio copies the current context
+        # into new tasks, so the task inherits this accumulator and the totals
+        # it adds from inside the graph are visible out here.
+        with usage_scope() as request_usage:
+            agent_task = asyncio.create_task(run_agent())
+            try:
+                while True:
+                    event_type, data = await asyncio.wait_for(event_queue.get(), timeout=300)
+                    if event_type == "_final_state":
+                        final = data
+                        usage = request_usage.as_dict()
+                        done_data = {
+                            "session_id": session_id,
+                            "total_sources": len(final.get("all_sources", final.get("search_results", []))),
+                            "iterations": final.get("iteration", 1),
+                            "confidence": final.get("confidence", 0.0),
+                            "invalid_citations": final.get("invalid_citations", 0),
+                            "model": settings.groq_synth_model,
+                            "latency_ms": int((time.monotonic() - start_time) * 1000),
+                            "cached": False,
+                            "usage": usage,
+                        }
+                        logger.info(
+                            "Research complete: %d tokens, $%.6f, %dms",
+                            usage["total_tokens"], usage["cost_usd"],
+                            done_data["latency_ms"],
+                        )
 
-                    # Persist detached: a slow managed-Postgres write used to sit
-                    # between the answer finishing and the user seeing "done".
-                    _spawn(_save_session(
-                        session_id=session_id,
-                        query=request.query,
-                        final_state=final,
-                        user_id=user_id,
-                        documents=stored_documents,
-                    ))
+                        # Persist detached: a slow managed-Postgres write used to sit
+                        # between the answer finishing and the user seeing "done".
+                        _spawn(_save_session(
+                            session_id=session_id,
+                            query=request.query,
+                            final_state=final,
+                            user_id=user_id,
+                            documents=stored_documents,
+                            usage=usage,
+                        ))
 
-                    if cache_key and is_cacheable(final, bool(request.documents)):
-                        _spawn(store_answer(cache_key, final))
+                        if cache_key and is_cacheable(final, bool(request.documents)):
+                            _spawn(store_answer(cache_key, final))
 
-                    yield _sse("done", done_data)
-                    break
-                elif event_type == "error":
-                    yield _sse("error", data)
-                else:
-                    yield _sse(event_type, data)
-        except asyncio.TimeoutError:
-            logger.error("Research timed out after 5 minutes")
-            yield _sse("error", {"message": "Research timed out"})
-        finally:
-            if not agent_task.done():
-                agent_task.cancel()
+                        yield _sse("done", done_data)
+                        break
+                    elif event_type == "error":
+                        yield _sse("error", data)
+                    else:
+                        yield _sse(event_type, data)
+            except asyncio.TimeoutError:
+                logger.error("Research timed out after 5 minutes")
+                yield _sse("error", {"message": "Research timed out"})
+            finally:
+                if not agent_task.done():
+                    agent_task.cancel()
 
     return StreamingResponse(
         event_stream(),

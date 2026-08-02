@@ -137,6 +137,58 @@ async def cache_set(prefix: str, key_data: str, value: Any, ttl: Optional[int] =
         logger.warning("Cache set error: %s", e)
 
 
+def _counter_key(name: str) -> str:
+    """Key for a monotonic counter. Not hashed — these are read by humans."""
+    return f"research:counter:{name}"
+
+
+async def counter_incr(name: str) -> None:
+    """
+    Increment a named counter by one, best-effort.
+
+    Deliberately has no TTL: these are lifetime process-independent tallies
+    (e.g. answer-cache hits vs misses) whose whole value is the ratio between
+    them over time. Silently does nothing when Redis is unavailable, exactly
+    like the rest of this module.
+    """
+    client = await get_redis()
+    if client is None:
+        return
+
+    try:
+        await client.incr(_counter_key(name))
+    except Exception as e:
+        logger.warning("Counter incr error for %s: %s", name, e)
+
+
+async def counters_get(names: list[str]) -> dict[str, int]:
+    """
+    Read several counters in one round trip. Missing counters read as 0.
+
+    Returns an all-zero mapping when Redis is down, so callers can render the
+    numbers unconditionally.
+    """
+    if not names:
+        return {}
+
+    client = await get_redis()
+    if client is None:
+        return {name: 0 for name in names}
+
+    try:
+        values = await client.mget([_counter_key(n) for n in names])
+        result: dict[str, int] = {}
+        for name, value in zip(names, values):
+            try:
+                result[name] = int(value) if value is not None else 0
+            except (TypeError, ValueError):
+                result[name] = 0
+        return result
+    except Exception as e:
+        logger.warning("Counter read error: %s", e)
+        return {name: 0 for name in names}
+
+
 async def close_redis() -> None:
     """Close the Redis connection."""
     global _redis_client, _redis_available
