@@ -19,13 +19,15 @@ from app.agents.graph import get_research_graph
 from app.routers.auth import get_current_user, check_rate_limit
 from app.services.answer_cache import (
     build_answer_key,
+    build_bucket_key,
     cached_state_for_save,
+    find_similar_answer,
     get_cached_answer,
     is_cacheable,
     iter_replay_events,
     store_answer,
 )
-from app.services import tracing
+from app.services import embeddings, tracing
 from app.services.usage import current_usage, empty_usage, usage_scope
 
 logger = logging.getLogger(__name__)
@@ -125,6 +127,11 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
         # search, rerank AND synthesis. Uploads bypass entirely: the document
         # text is not part of the key, so a hit could answer from the wrong file.
         cache_key: str | None = None
+        bucket_key = ""
+        question_embedding: list[float] | None = None
+        cached = None
+        cache_kind = "exact"
+
         if settings.answer_cache_enabled and not request.documents:
             cache_key = build_answer_key(
                 query=request.query,
@@ -132,14 +139,47 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 user_name=user_name,
                 model=settings.groq_synth_model,
             )
+            bucket_key = build_bucket_key(user_name, settings.groq_synth_model)
+
             with tracing.span(
                 "answer-cache-lookup", input=tracing.preview(request.query)
             ) as lookup_span:
                 cached = await get_cached_answer(cache_key)
                 lookup_span.update(output={"hit": bool(cached)})
 
+            # --- Semantic layer -------------------------------------------
+            # Only on an exact miss, and only for a standalone question: the
+            # exact key covers conversation history because "how does its
+            # pricing work?" means different things in different threads, and
+            # meaning-based matching cannot preserve that.
+            semantic_eligible = (
+                settings.semantic_cache_enabled
+                and not cached
+                and not history
+                and embeddings.is_configured()
+            )
+            if semantic_eligible:
+                with tracing.span(
+                    "semantic-cache-lookup", input=tracing.preview(request.query)
+                ) as semantic_span:
+                    question_embedding = await embeddings.embed(request.query)
+                    if question_embedding:
+                        cached = await find_similar_answer(
+                            request.query, question_embedding, bucket_key
+                        )
+                    if cached:
+                        cache_kind = "semantic"
+                    semantic_span.update(output={
+                        "hit": bool(cached),
+                        "embedded": bool(question_embedding),
+                        "similarity": (cached or {}).get("similarity"),
+                        "matched_query": tracing.preview((cached or {}).get("matched_query", "")),
+                    })
+
             if cached:
-                logger.info("Answer cache HIT for: %s", request.query[:80])
+                logger.info(
+                    "Answer cache HIT (%s) for: %s", cache_kind, request.query[:80]
+                )
                 # A hit still gets a `research` observation, so cached and live
                 # turns sit side by side in the dashboard and the hit rate is
                 # visible there as well as on /api/health. Opened and closed
@@ -151,7 +191,7 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     with tracing.span(
                         "research",
                         input=tracing.preview(request.query),
-                        metadata={"cached": True},
+                        metadata={"cached": True, "cache_kind": cache_kind},
                     ) as root_span:
                         root_span.update(output={
                             "answer": tracing.preview(cached.get("answer", "")),
@@ -182,6 +222,12 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     "model": settings.groq_synth_model,
                     "latency_ms": int((time.monotonic() - start_time) * 1000),
                     "cached": True,
+                    # "exact" or "semantic". A semantic hit answers a question
+                    # the user did not literally ask, so the UI says so and
+                    # shows the question it actually reused.
+                    "cache_kind": cache_kind,
+                    "matched_query": cached.get("matched_query", ""),
+                    "similarity": cached.get("similarity"),
                     # A replayed answer makes no LLM calls at all. Reporting
                     # real zeros (rather than omitting the field) is the point:
                     # it is what makes the cache's saving visible.
@@ -284,6 +330,7 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                             "model": settings.groq_synth_model,
                             "latency_ms": int((time.monotonic() - start_time) * 1000),
                             "cached": False,
+                            "cache_kind": "",
                             "usage": usage,
                         }
                         logger.info(
@@ -304,7 +351,17 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                         ))
 
                         if cache_key and is_cacheable(final, bool(request.documents)):
-                            _spawn(store_answer(cache_key, final))
+                            # The embedding was computed during the (missed)
+                            # semantic lookup, so indexing this answer costs
+                            # nothing extra. When semantic matching is off it is
+                            # None and the entry is stored exact-match only.
+                            _spawn(store_answer(
+                                cache_key,
+                                final,
+                                query=request.query,
+                                embedding=question_embedding,
+                                bucket_key=bucket_key,
+                            ))
 
                         yield _sse("done", done_data)
                         break

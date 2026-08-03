@@ -1449,6 +1449,34 @@ body::before {
     color: var(--accent);
 }
 
+/* Disclosure shown when an answer was reused for a differently-worded
+   question. Deliberately visible rather than a tooltip: the user asked one
+   thing and is reading the answer to another. */
+.reused-answer-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-card);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.reused-answer-notice svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    opacity: 0.7;
+}
+
+.reused-answer-notice em {
+    font-style: italic;
+    color: var(--text-primary);
+}
+
 /* ============================================================
    TRACE TAB — what was ranked, sent to the model, and cited
    ============================================================ */

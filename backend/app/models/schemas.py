@@ -190,6 +190,12 @@ class DoneEvent(BaseModel):
     model: str = ""
     latency_ms: int = 0
     cached: bool = False
+    # "exact" | "semantic" | "" — how the cache matched, when it did. A semantic
+    # hit answers a differently-worded question, so the UI discloses it along
+    # with the question that was actually reused.
+    cache_kind: str = ""
+    matched_query: str = ""
+    similarity: Optional[float] = None
     # Token totals + estimated cost for the turn; all zeros on a cache hit.
     # Shape mirrors services.usage.UsageAccumulator.as_dict().
     usage: dict = Field(default_factory=dict)

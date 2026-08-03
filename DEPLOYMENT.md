@@ -132,6 +132,53 @@ logs a warning once.
 
 ---
 
+## 7. Semantic answer cache (optional, off by default)
+
+The exact-match cache only fires when a question repeats word for word. The
+semantic layer sits behind it: on a miss it embeds the question and looks for a
+previously answered one that *means* the same thing.
+
+To enable, set both:
+
+```
+SEMANTIC_CACHE_ENABLED=true
+EMBEDDING_API_KEY=<key>        # Groq has no embedding models, so this is a
+                               # separate provider — Jina has a free tier
+```
+
+Either one missing and it stays inert. `/api/health` reports `semantic_hits`,
+`semantic_rejected` and `semantic_rescue_rate` alongside the exact-cache tallies.
+
+**Why this one is off by default**, unlike Sentry and Langfuse: it can serve a
+user the answer to a question they did not literally ask. Embeddings encode
+topic, not direction — *"best vector database"* and *"worst vector database"*
+score around 0.97 against each other. Four rails guard against that
+(`app/utils/semantic_guards.py`): differing numbers, differing polarity words,
+reversed `X vs Y` order, and a floor on shared words. A hit must clear all four
+*and* the similarity threshold, and the UI always discloses which earlier
+question was reused.
+
+Before turning it on in production, check
+`SEMANTIC_SIMILARITY_THRESHOLD` against real question pairs — 0.92 is a
+starting point, not a tuned value.
+
+### Cache lifetimes
+
+Triage now labels every answer time-sensitive or not, so lifetimes match the
+content:
+
+| Kind of answer | Lifetime |
+| --- | --- |
+| Time-sensitive (prices, news, "latest") | `ANSWER_CACHE_TTL`, 15 min |
+| Evergreen (definitions, explanations) | `ANSWER_CACHE_EVERGREEN_TTL`, 6 h |
+| Semantic hit on a time-sensitive answer | `SEMANTIC_TIME_SENSITIVE_MAX_AGE`, 2 min |
+
+That last row is deliberately strict: a near-match to a time-sensitive answer
+compounds two kinds of drift — how old the answer is, and the fact that it
+answers a slightly different question.
+
+---
+
 ## Smoke test
 
 ```bash

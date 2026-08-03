@@ -56,6 +56,14 @@ services:
         sync: false
       - key: LANGFUSE_HOST
         value: https://cloud.langfuse.com
+      # Optional semantic answer cache. Needs BOTH the flag and an embedding
+      # key (Groq serves no embedding models). Off by default because it can
+      # answer a question the user did not literally ask — see DEPLOYMENT.md
+      # before enabling.
+      - key: SEMANTIC_CACHE_ENABLED
+        value: "false"
+      - key: EMBEDDING_API_KEY
+        sync: false
       # MUST include your Vercel URL(s) as a JSON array, e.g.
       #   ["https://your-app.vercel.app"]
       - key: CORS_ORIGINS

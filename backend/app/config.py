@@ -59,11 +59,52 @@ class Settings(BaseSettings):
     # The existing search/scrape caches only avoid the network hops; both LLM
     # calls still ran on a repeat query before this.
     answer_cache_enabled: bool = True
-    # Deliberately short. The cache is consulted BEFORE triage runs, so we cannot
-    # yet tell an evergreen question ("what is quantum computing") from a live
-    # one ("bitcoin price today"). A tight TTL bounds how stale a hit can be
-    # until triage emits a time-sensitivity flag.
+    # TTL for answers triage flagged as time-sensitive (news, prices, "latest").
+    # Short, because these go wrong quickly.
     answer_cache_ttl: int = 900  # 15 minutes
+    # TTL for evergreen answers ("what is quantum computing"). Triage now labels
+    # each answer as it is produced, so the flag rides along with the cached
+    # entry and a definition no longer expires as fast as a stock price.
+    answer_cache_evergreen_ttl: int = 21600  # 6 hours
+
+    # --- Semantic answer cache (near-duplicate questions) ---
+    # Sits behind the exact-match cache: on an exact miss, embed the question and
+    # look for a previously answered one with the same meaning.
+    #
+    # OFF by default, unlike the other optional integrations. This one can serve
+    # a user an answer to a question they did not ask, so it should be switched
+    # on deliberately after the threshold has been checked against real pairs
+    # (see evals/). It additionally requires an embedding key.
+    semantic_cache_enabled: bool = False
+    # Cosine similarity required to reuse an answer. 0.92 is a starting point,
+    # not a tuned value — verify with the threshold sweep before trusting it.
+    semantic_similarity_threshold: float = 0.92
+    # Questions must also share this fraction of their meaningful words, as a
+    # blunt backstop against two unrelated questions that happen to score well.
+    #
+    # 0.3 rather than something stricter because short questions have very few
+    # content words once stopwords are dropped: "what changed in Python 3.12"
+    # and "what is new in Python 3.12" reduce to {changed, python} vs
+    # {new, python} — a genuine paraphrase scoring only 0.33. Unrelated
+    # questions score ~0.0, so this still separates them decisively. The
+    # dangerous near-misses are caught by the number and polarity rails, not
+    # by this one.
+    semantic_min_token_overlap: float = 0.3
+    # Vectors held per bucket. Every lookup scores the whole bucket in-process,
+    # so this caps both memory and lookup cost (~40ms at 500).
+    semantic_max_index_entries: int = 300
+    # A semantic hit on a time-sensitive answer must be much fresher than an
+    # exact hit: the question is not even the same one, so staleness compounds.
+    semantic_time_sensitive_max_age: int = 120  # 2 minutes
+
+    # --- Embeddings (only used by the semantic cache) ---
+    # Groq serves no embedding models, so this is a separate provider. Blank key
+    # = semantic cache stays inert regardless of the flag above.
+    embedding_provider: str = "jina"      # "jina" | "openai"
+    embedding_api_key: str = ""
+    embedding_model: str = "jina-embeddings-v3"
+    embedding_timeout: int = 10           # seconds; the hot path cannot wait longer
+    embedding_dimensions: int = 384       # smaller = less Redis, still plenty here
 
     # --- PostgreSQL ---
     database_url: str = "postgresql+asyncpg://agent:agent@postgres:5432/research_agent"

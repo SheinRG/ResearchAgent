@@ -11,21 +11,32 @@
 - **⚡ Neural re-ranking** — FlashRank (CPU-only) ranks chunks by relevance before synthesis
 - **📝 Trustworthy citations** — a single canonical, relevance-ordered source list drives the prompt, the `[n]` markers, and the UI, so every citation points at exactly the source the model read
 - **🌊 Real-time streaming** — SSE token streaming for live answer generation
+- **🔎 Trace tab** — every answer ships with a receipt: what was searched, what was ranked, what actually reached the model, and what got cited
+- **💰 Answer cache** — a repeat question replays the whole answer (sources, images, trace) for **$0 and zero model calls**; triage labels each answer time-sensitive or evergreen so a stock price and a definition don't share a TTL
+- **🧲 Semantic cache** *(optional, off by default)* — on an exact miss, embeds the question and reuses an answer to a differently-worded version of it, behind four safety rails so *"best vector DB"* never gets served *"worst vector DB"*
 - **🔐 Auth** — email/password (bcrypt) + Google OAuth (fail-closed token validation), stateless JWT, per-user rate limiting
-- **💾 Persistence** — PostgreSQL for sessions/history, Redis (optional) for search & scrape caching
+- **💾 Persistence** — PostgreSQL for sessions/history, Redis (optional) for search, scrape, and answer caching
+- **📊 Observability & evals** — Langfuse tracing per pipeline stage, per-turn token/cost accounting, and a scored eval set that runs weekly in CI
 - **🚀 Production-ready** — Dockerized services, GitHub Actions CI, pytest suite, deep health checks, and optional Sentry error tracking
 
 ## 🏗️ Architecture
 
 ```
 User Query
-  → Router (fast LLM)         triage: casual chat vs. research
+  → Answer cache              exact key (query + history + user + model)
+      ├─ hit ──────────────→ replay the full SSE sequence · $0 · no model calls
+      └─ miss ↓
+  → Semantic cache (opt-in)   embed the question, match one that MEANS the same
+      ├─ hit (guards pass) ─→ replay + disclose which question was reused
+      └─ miss ↓
+  → Router (fast LLM)         triage: casual chat vs. research, + time-sensitivity
       ├─ chat ──→ Conversational (fast LLM) → instant reply
       └─ research ↓
   → Researcher (parallel)     decompose into 2–4 sub-queries
                               → Tavily search+read  (Serper + Trafilatura fallback)
   → Re-ranker (FlashRank)     rank chunks; build canonical source list
   → Synthesizer (strong LLM)  stream a cited Markdown answer + follow-ups
+                              → store in cache (TTL by time-sensitivity)
 ```
 
 > **Why no planner/reflector node?** Earlier versions ran a 5-node graph with a
@@ -43,16 +54,17 @@ User Query
 | **Search + Read** | Tavily (primary) · Serper (images + fallback) |
 | **Extraction** | Trafilatura (fallback scrape path) |
 | **Re-ranking** | FlashRank (CPU-only) — `TinyBERT-L-2` for small instances, `MiniLM-L-12` for quality |
+| **Embeddings** | Jina (or OpenAI) — **only** for semantic cache matching, never for retrieval; optional |
 | **Database** | PostgreSQL 16 |
-| **Cache** | Redis 7 (optional) |
+| **Cache** | Redis 7 (optional) — search, scrape, and full answer replay |
 | **Infrastructure** | Docker Compose · Render (backend) + Vercel (frontend) |
-| **Observability** | GitHub Actions CI · pytest · Sentry |
+| **Observability** | GitHub Actions CI · pytest · Langfuse tracing · Sentry · weekly eval run |
 
 ## 🧗 Engineering Journey — Challenges & Solutions
 
 This started as a local-only prototype and evolved into a deployed, multi-user
-product over ~3 weeks and 68 commits. The hardest problems weren't writing
-features — they were latency, citation trust, concurrency, and going public.
+product over ~3 weeks. The hardest problems weren't writing features — they were
+latency, citation trust, concurrency, going public, and then paying for it.
 
 ### 1. Latency: a ~35s answer felt broken → got it to ~4.5s
 
@@ -114,6 +126,59 @@ internal-URL trap on managed databases, a backend dev-server crash loop, and a
 401 that dead-ended the UI instead of recovering. Closed them out alongside CI,
 deeper health checks, and custom error pages. *(`e67a9ab`, `8dadcce`,
 `69d13a1`, `e67a4be`)*
+
+### 7. Seeing inside the pipeline before optimizing it again
+
+Every earlier optimization was argued from a stopwatch and a hunch. Added
+**Langfuse tracing** with a span per stage (triage, search, rerank, synthesis,
+cache lookup) plus **per-turn token and cost accounting** surfaced in the `done`
+event, so "which stage is slow" and "what did that answer cost" stopped being
+guesses. A **Trace tab** puts the same receipt in front of the user: what was
+ranked, what actually reached the model, and what got cited. Then a **scored
+eval set** (`backend/evals/`) that runs weekly in CI, so a prompt change shows up
+as a number rather than a vibe. *(`2fc3496`, `3eb94ef`, `8aa3b0b`)*
+
+### 8. The same question shouldn't cost money twice
+
+Search and scrape were cached, but **both LLM calls still ran on a repeat
+question** — the expensive part was the only part not cached. Added an **answer
+cache** that stores the complete user-visible output and, on a hit, replays the
+whole SSE sequence (sources, images, trace, follow-ups) so the UI is identical
+to a live run — just at **$0 with zero model calls**.
+
+The tricky part was staleness. The cache is consulted *before* triage, so at
+lookup time nothing knows whether the question is "what is quantum computing" or
+"bitcoin price". Fix: triage now also emits a **`time_sensitive` flag**, and that
+label is stored *with the answer* — so lifetimes match the content (15 min for
+live data, 6 h for evergreen) and the flag defaults to `true` on any triage
+failure, meaning a bug can never make a live question look permanent.
+
+### 9. Matching questions by meaning — carefully
+
+An exact-match cache only fires on a word-for-word repeat, and nobody types the
+same question twice. A **semantic layer** sits behind it: on a miss, embed the
+question and look for a stored one that *means* the same thing.
+
+The danger is the whole feature. Embeddings encode **topic, not direction** —
+*"best vector database"* and *"worst vector database"* score ~0.97 against each
+other, while the correct answers are opposites. Serving one for the other, with
+citations, is worse than being slow. So a high similarity score is necessary but
+not sufficient; every candidate must also clear four cheap deterministic rails
+(`app/utils/semantic_guards.py`):
+
+| Rail | Catches |
+| --- | --- |
+| **Numbers** | "Python 3.11 features" vs "3.12" — barely moves a vector |
+| **Polarity** | best/worst, pros/cons, is/isn't — flips meaning, not topic |
+| **Order** | "is X better than Y" vs "is Y better than X" |
+| **Word overlap** | two unrelated questions that happen to score highly |
+
+Plus three structural limits: semantic matching is **first-turn only** (the exact
+key covers conversation history because *"how does its pricing work?"* means
+different things in different threads), a near-match to a time-sensitive answer
+must be **under 2 minutes old**, and the UI **always discloses** which earlier
+question was reused. It ships **off by default** — unlike every other optional
+integration here, this one can answer a question the user did not literally ask.
 
 ## 🚀 Quick Start
 
@@ -182,10 +247,21 @@ npm run dev
 event: phase        → {"phase": "planning", "message": "Breaking down..."}
 event: sub_queries  → {"queries": ["q1", "q2", "q3"]}
 event: sources      → {"sources": [{url, title, domain, favicon, snippet}], "replace": true}
+event: images       → {"images": [{url, thumbnail, title, source, domain}]}
 event: token        → {"token": "word"}
+event: trace        → {what was ranked, what was sent to the model, what was cited}
 event: follow_up    → {"suggestions": ["question1", "question2"]}
-event: done         → {"session_id": "...", "total_sources": 8, "confidence": 0.89}
+event: done         → {"session_id": "...", "total_sources": 8, "confidence": 0.89,
+                       "latency_ms": 4520, "usage": {...tokens + cost...},
+                       "cached": false, "cache_kind": "", "matched_query": "",
+                       "similarity": null}
 ```
+
+A **cache hit replays this same sequence** — sources, images, trace and all — so
+a replayed turn is indistinguishable from a live one except for `cached: true`
+and an all-zero `usage`. On a *semantic* hit, `cache_kind` is `"semantic"` and
+`matched_query` carries the earlier question whose answer was reused; the UI
+shows it to the user rather than silently substituting an answer.
 
 ## 🔧 Configuration
 
@@ -204,6 +280,25 @@ Backend variables (see `backend/.env.example`):
 | `DATABASE_URL` | PostgreSQL connection string | `postgresql+asyncpg://agent:agent@postgres:5432/research_agent` |
 | `REDIS_URL` | Redis connection URL | `redis://redis:6379/0` |
 | `RATE_LIMIT_PER_HOUR` | Research queries per user per hour | `30` |
+| `ANSWER_CACHE_ENABLED` | Replay a stored answer on a repeat question | `true` |
+| `ANSWER_CACHE_TTL` | Lifetime of a **time-sensitive** answer | `900` (15 min) |
+| `ANSWER_CACHE_EVERGREEN_TTL` | Lifetime of an **evergreen** answer | `21600` (6 h) |
+| `SEMANTIC_CACHE_ENABLED` | Match near-duplicate questions by meaning (**off by default**) | `false` |
+| `SEMANTIC_SIMILARITY_THRESHOLD` | Cosine score required to reuse an answer | `0.92` |
+| `EMBEDDING_PROVIDER` / `EMBEDDING_API_KEY` | Embeddings for the semantic cache — Groq has none, so this is a separate provider | `jina` / — |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Per-stage tracing (both required, else no-op) | — |
+| `SENTRY_DSN` | Error tracking (no-ops when unset) | — |
+
+> **Semantic cache is deliberately opt-in.** It needs *both* the flag and an
+> embedding key, and stays inert if either is missing. See
+> [`DEPLOYMENT.md`](DEPLOYMENT.md#7-semantic-answer-cache-optional-off-by-default)
+> before enabling it in production — and check the threshold against real
+> question pairs first; `0.92` is a starting point, not a tuned value.
+>
+> Cache effectiveness is observable at `/api/health`: `hits`, `misses`,
+> `hit_rate`, plus `semantic_hits`, `semantic_rejected` and
+> `semantic_rescue_rate` (the share of otherwise-missed questions rescued by
+> meaning-based matching).
 
 Frontend variables (see `frontend/.env.example`) — note these are inlined at **build** time:
 
@@ -218,10 +313,13 @@ Frontend variables (see `frontend/.env.example`) — note these are inlined at *
 ├── backend/
 │   ├── app/
 │   │   ├── agents/       # LangGraph nodes (router, conversational, researcher, synthesizer) + graph wiring
-│   │   ├── services/     # Groq LLM, Tavily + Serper search, Trafilatura scraper, FlashRank, Redis, auth
+│   │   ├── services/     # Groq LLM, Tavily + Serper search, Trafilatura scraper, FlashRank,
+│   │   │                 #   Redis, answer_cache, embeddings, usage/cost, tracing, auth
 │   │   ├── models/       # Pydantic schemas, SQLAlchemy models
-│   │   ├── utils/        # Text chunking, citation extraction
+│   │   ├── utils/        # Text chunking, citation extraction, semantic cache guards
 │   │   └── main.py       # FastAPI app: auth, rate limiting, SSE research endpoint
+│   ├── evals/            # Fixed query set + pure scorers + runner (weekly CI run)
+│   ├── tests/            # pytest: pipeline, services, cache, guards, auth, rate limit
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/

@@ -187,6 +187,19 @@ export default function ResearchTurn({
 
       {isLive && showSkeleton && !error && <SkeletonLoader />}
 
+      {/* A semantic cache hit answers a question the user did not literally
+          ask. Saying so — and showing the question that was reused — is the
+          difference between a fast answer and a quietly substituted one. */}
+      {doneData?.cache_kind === "semantic" && doneData.matched_query && (
+        <div className="reused-answer-notice">
+          <RefreshIcon width={13} height={13} />
+          <span>
+            Reused the answer to a similar question:{" "}
+            <em>&ldquo;{doneData.matched_query}&rdquo;</em>
+          </span>
+        </div>
+      )}
+
       {answer && (
         <StreamingAnswer answer={answer} isStreaming={isStreaming} sources={sources} />
       )}
@@ -210,7 +223,14 @@ export default function ResearchTurn({
           {doneData.cached ? (
             <>
               <span className="done-separator">/</span>
-              <span className="done-cached" title="Replayed from the answer cache — no model calls were made">
+              <span
+                className="done-cached"
+                title={
+                  doneData.cache_kind === "semantic"
+                    ? `Reused the answer to a similar earlier question (${Math.round((doneData.similarity || 0) * 100)}% match) — no model calls were made`
+                    : "Replayed from the answer cache — no model calls were made"
+                }
+              >
                 cached · $0
               </span>
             </>

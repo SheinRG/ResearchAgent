@@ -137,6 +137,62 @@ async def cache_set(prefix: str, key_data: str, value: Any, ttl: Optional[int] =
         logger.warning("Cache set error: %s", e)
 
 
+async def hash_set(key: str, field: str, value: Any, ttl: Optional[int] = None) -> None:
+    """
+    Store one JSON-serializable field in a Redis hash, best-effort.
+
+    Used by the semantic cache's vector index, where one hash holds every
+    embedding for a bucket and the field name is the answer's cache key.
+    """
+    client = await get_redis()
+    if client is None:
+        return
+
+    try:
+        await client.hset(key, field, json.dumps(value, default=str))
+        if ttl:
+            # Refreshed on every write, so an index in active use never expires
+            # while an abandoned one is reclaimed instead of leaking.
+            await client.expire(key, ttl)
+    except Exception as e:
+        logger.warning("Hash set error for %s: %s", key, e)
+
+
+async def hash_get_all(key: str) -> dict[str, Any]:
+    """Read a whole hash, dropping any field whose JSON no longer parses."""
+    client = await get_redis()
+    if client is None:
+        return {}
+
+    try:
+        raw = await client.hgetall(key)
+        result: dict[str, Any] = {}
+        for field, value in (raw or {}).items():
+            try:
+                result[field] = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return result
+    except Exception as e:
+        logger.warning("Hash read error for %s: %s", key, e)
+        return {}
+
+
+async def hash_delete(key: str, fields: list[str]) -> None:
+    """Remove fields from a hash, best-effort."""
+    if not fields:
+        return
+
+    client = await get_redis()
+    if client is None:
+        return
+
+    try:
+        await client.hdel(key, *fields)
+    except Exception as e:
+        logger.warning("Hash delete error for %s: %s", key, e)
+
+
 def _counter_key(name: str) -> str:
     """Key for a monotonic counter. Not hashed — these are read by humans."""
     return f"research:counter:{name}"

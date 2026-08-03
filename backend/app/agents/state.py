@@ -90,6 +90,10 @@ class ResearchState(TypedDict, total=False):
     # When documents are attached, whether to also run web search to augment them.
     # False = answer from the uploaded doc(s) only; True = also hit the web.
     needs_web: bool
+    # Whether the answer goes stale ("bitcoin price" vs "what is RAG"). Controls
+    # how long the answer may be reused from cache and nothing else. Defaults to
+    # True everywhere, so a failure can never make a live question look evergreen.
+    time_sensitive: bool
 
     # --- Planner Output ---
     sub_queries: list[str]                              # Decomposed sub-questions

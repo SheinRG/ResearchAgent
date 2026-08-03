@@ -38,14 +38,20 @@ STEP 2 — ONLY when mode is "research", plan the research:
 
 For "chat" mode, set "sub_queries" to [] and "answer_format" to {{"type": "prose", "reasoning": "", "columns": []}}.
 
-STEP 3 — needs_web (ONLY applies when documents are attached):
+STEP 3 — time_sensitive (set for BOTH modes):
+Decide whether the correct answer changes over time:
+- true: news, prices, scores, weather, "latest"/"current"/"today", release versions, rankings, anything where an answer written last week could now be wrong.
+- false: definitions, explanations, history, established facts, how-tos for stable tools, opinions — where an answer from last month is still correct today.
+When unsure, choose true. This only controls how long an answer may be reused from cache; it never changes what you research.
+
+STEP 4 — needs_web (ONLY applies when documents are attached):
 If a document has been attached to this message, decide whether web augmentation is actually needed:
 - Set "needs_web": false when the user's question is about, or answerable from, the attached document(s) alone — e.g. "what is this about", "summarize this", "explain section 3", "what does it say about X", extract/Q&A about the document content. This is the DEFAULT when a document is present.
 - Set "needs_web": true ONLY when answering well genuinely requires external or current information BEYOND what the document contains — e.g. comparing the document to outside data, fetching latest news/prices, or facts clearly absent from the document.
 When NO documents are attached, omit "needs_web" or set it false — it is ignored downstream.
 
 Respond ONLY with valid JSON in this exact format:
-{{"mode": "chat|research", "sub_queries": ["sub-query 1", "sub-query 2"], "answer_format": {{"type": "table|list|steps|prose", "reasoning": "one short clause", "columns": ["Col A", "Col B"]}}, "needs_web": true|false}}
+{{"mode": "chat|research", "sub_queries": ["sub-query 1", "sub-query 2"], "answer_format": {{"type": "table|list|steps|prose", "reasoning": "one short clause", "columns": ["Col A", "Col B"]}}, "time_sensitive": true|false, "needs_web": true|false}}
 Note: "columns" is REQUIRED only when type is "table" (2-6 short header strings tailored to the query); use [] otherwise. "needs_web" is only meaningful when documents are attached; it can be omitted or false otherwise."""
 
 TRIAGE_PROMPT = """{conversation}{documents_note}Latest user message: {query}
@@ -130,6 +136,10 @@ async def router_node(state: ResearchState) -> dict:
     mode = "research"
     sub_queries: list[str] = []
     answer_format = dict(_DEFAULT_FORMAT)
+    # Whether the answer goes stale. Only controls cache lifetime, never what
+    # gets researched. Defaults to True so a triage failure can never cause a
+    # live-data question to be served from an old cache entry.
+    time_sensitive = True
     # Default: when docs are present, skip web unless triage explicitly enables it;
     # when no docs, web always runs (needs_web=True is irrelevant but harmless).
     needs_web: bool = not has_documents
@@ -155,6 +165,12 @@ async def router_node(state: ResearchState) -> dict:
             sub_queries = _clean_sub_queries(result.get("sub_queries"), query)
             answer_format = _clean_format(result.get("answer_format"))
 
+        # Read it for both modes. A missing key means the model omitted it, in
+        # which case the safe reading is "assume it goes stale".
+        raw_time_sensitive = result.get("time_sensitive")
+        if isinstance(raw_time_sensitive, bool):
+            time_sensitive = raw_time_sensitive
+
         # Only read needs_web from triage when documents are actually attached;
         # default False (doc-only) so the LLM must opt in to web augmentation.
         if has_documents:
@@ -178,8 +194,8 @@ async def router_node(state: ResearchState) -> dict:
             sub_queries = _clean_sub_queries(None, query)
 
     logger.info(
-        "Triage: mode=%s, %d sub-queries, format=%s%s for: %s",
-        mode, len(sub_queries), answer_format.get("type"),
+        "Triage: mode=%s, %d sub-queries, format=%s, time_sensitive=%s%s for: %s",
+        mode, len(sub_queries), answer_format.get("type"), time_sensitive,
         f", needs_web={needs_web}" if has_documents else "",
         query[:80],
     )
@@ -197,5 +213,6 @@ async def router_node(state: ResearchState) -> dict:
         "mode": mode,
         "sub_queries": sub_queries,
         "answer_format": answer_format,
+        "time_sensitive": time_sensitive,
         "needs_web": needs_web,
     }

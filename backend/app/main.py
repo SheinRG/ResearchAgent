@@ -14,6 +14,7 @@ from app.models.database import init_db, close_db, get_engine
 from app.services.llm import get_llm_client
 from app.services.answer_cache import cache_stats
 from app.services.cache import close_redis, get_redis
+from app.services.embeddings import close_embeddings
 from app.services.scraper import close_scraper
 from app.services.tavily import close_tavily
 from app.services.tracing import init_tracing, is_enabled as tracing_enabled, shutdown_tracing
@@ -88,6 +89,7 @@ async def lifespan(app: FastAPI):
 
     await close_scraper()
     await close_tavily()
+    await close_embeddings()
     await close_redis()
     await close_db()
     # Last: flush buffered observations, including any recorded while the other
