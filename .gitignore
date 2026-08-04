@@ -34,6 +34,7 @@ backend/evals/results/
 # Scratch files from local smoke-testing (may contain auth tokens).
 tok.tmp
 *.tmp
+scratch-*.txt
 
 # ===== Logs / OS / Editor =====
 *.log
