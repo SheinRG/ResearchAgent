@@ -50,7 +50,7 @@ function downloadBlob(blob, filename) {
 /**
  * Parse a Markdown string into an array of block descriptors.
  * Recognised block types: "heading1", "heading2", "heading3",
- * "bullet", "table-row", "blank", "paragraph".
+ * "bullet", "table-row", "code", "blank", "paragraph".
  *
  * Only the text within is cleaned (strips inline markers like **bold**,
  * `code`, [n] citation refs) — the type carries structural intent so
@@ -63,9 +63,22 @@ function parseMarkdown(md) {
   if (!md) return [];
   const lines = md.split("\n");
   const blocks = [];
+  let inCodeFence = false;
 
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
+
+    // Fenced code blocks (``` or ~~~). The fence lines themselves are markup,
+    // not content, so they are dropped and everything between them is emitted
+    // verbatim — inline cleaning would eat the *, _, and ` that code needs.
+    if (/^\s*(```|~~~)/.test(line)) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) {
+      blocks.push({ type: "code", text: rawLine });
+      continue;
+    }
 
     // Blank line
     if (line.trim() === "") {
@@ -316,6 +329,17 @@ export async function exportPdf(session) {
           ensureSpace(tLines.length * tLineH + 1);
           doc.text(tLines, marginL, y);
           y += tLines.length * tLineH + 1;
+        } else if (block.type === "code") {
+          ensureSpace(5);
+          doc.setFontSize(8.5);
+          doc.setFont("courier", "normal");
+          doc.setTextColor(70, 70, 90);
+          const cLines = doc.splitTextToSize(block.text || " ", usableW - 4);
+          const cLineH = 8.5 * 0.4;
+          ensureSpace(cLines.length * cLineH + 1);
+          doc.text(cLines, marginL + 3, y);
+          y += cLines.length * cLineH + 1;
+          doc.setTextColor(30, 30, 30);
         } else {
           addWrappedText(block.text, 9.5);
         }
@@ -470,7 +494,7 @@ export async function exportDocx(session) {
               bullet: { level: 0 },
             })
           );
-        } else if (block.type === "table-row") {
+        } else if (block.type === "table-row" || block.type === "code") {
           children.push(
             new Paragraph({
               children: [
