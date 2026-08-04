@@ -119,9 +119,14 @@ def _force_split(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
     chunks = []
     start = 0
 
+    # Each iteration must move `start` forward, otherwise the loop never ends.
+    # Config drift (an overlap set at or above the chunk size) would otherwise
+    # hang the whole request on a long page, so clamp the stride to >= 1 char.
+    stride = max(1, chunk_size - chunk_overlap)
+
     while start < len(text):
         end = start + chunk_size
         chunks.append(text[start:end])
-        start = end - chunk_overlap  # Step back by overlap amount
+        start += stride
 
     return chunks

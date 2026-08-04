@@ -124,6 +124,14 @@ class TestForceSplit:
         chunks = _force_split(text, chunk_size=30, chunk_overlap=0)
         assert chunks == [text]
 
+    def test_overlap_at_or_above_chunk_size_still_terminates(self):
+        """A misconfigured overlap must not spin forever on a long page."""
+        text = "E" * 200
+        for overlap in (30, 45):
+            chunks = _force_split(text, chunk_size=30, chunk_overlap=overlap)
+            assert chunks, "expected at least one chunk"
+            assert len(chunks) <= len(text), "stride collapsed to zero"
+
 
 # ===========================================================================
 # CITATION_PATTERN regex
