@@ -7,6 +7,7 @@ Gracefully falls back to no-cache if Redis is unavailable.
 import json
 import hashlib
 import logging
+import time
 from typing import Optional, Any
 
 import redis.asyncio as aioredis
@@ -16,34 +17,61 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 _redis_client: Optional[aioredis.Redis] = None
-_redis_available: bool = True
+# A failed connect puts Redis in a cooldown rather than disabling it for the
+# life of the process. This used to be a one-way `_redis_available = False`
+# latch: a single blip on a free-tier instance turned the cache off until the
+# next restart, silently taking the answer cache, the rate limiter's Redis path
+# and the health counters with it.
+_redis_retry_at: float = 0.0
+_redis_backoff: float = 0.0
+
+_BACKOFF_START = 5.0    # seconds before the first reconnect attempt
+_BACKOFF_MAX = 300.0    # cap, so a long outage doesn't reconnect on every request
 
 
 async def get_redis() -> Optional[aioredis.Redis]:
-    """Get the Redis client, initializing if needed."""
-    global _redis_client, _redis_available
+    """
+    Get the Redis client, connecting if needed.
 
-    if not _redis_available:
+    Returns None while Redis is unreachable, so every caller degrades to
+    no-cache — but retries on an exponential backoff instead of giving up
+    permanently.
+    """
+    global _redis_client, _redis_retry_at, _redis_backoff
+
+    if _redis_client is not None:
+        return _redis_client
+
+    # Still cooling down from a recent failure.
+    if time.monotonic() < _redis_retry_at:
         return None
 
-    if _redis_client is None:
-        try:
-            settings = get_settings()
-            _redis_client = aioredis.from_url(
-                settings.redis_url,
-                encoding="utf-8",
-                decode_responses=True,
-                socket_connect_timeout=5,  # seconds
-            )
-            await _redis_client.ping()
-            logger.info("Redis connected at %s", settings.redis_url)
-        except Exception as e:
-            logger.warning("Redis unavailable, running without cache: %s", e)
-            _redis_available = False
-            _redis_client = None
-            return None
-
-    return _redis_client
+    try:
+        settings = get_settings()
+        client = aioredis.from_url(
+            settings.redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+            socket_connect_timeout=5,  # seconds
+        )
+        await client.ping()
+        _redis_client = client
+        _redis_backoff = 0.0
+        _redis_retry_at = 0.0
+        logger.info("Redis connected at %s", settings.redis_url)
+        return _redis_client
+    except Exception as e:
+        _redis_backoff = (
+            _BACKOFF_START if _redis_backoff == 0.0
+            else min(_redis_backoff * 2, _BACKOFF_MAX)
+        )
+        _redis_retry_at = time.monotonic() + _redis_backoff
+        logger.warning(
+            "Redis unavailable, running without cache (retry in %.0fs): %s",
+            _redis_backoff, e,
+        )
+        _redis_client = None
+        return None
 
 
 def _cache_key(prefix: str, data: str) -> str:
@@ -246,10 +274,11 @@ async def counters_get(names: list[str]) -> dict[str, int]:
 
 
 async def close_redis() -> None:
-    """Close the Redis connection."""
-    global _redis_client, _redis_available
+    """Close the Redis connection and clear any reconnect backoff."""
+    global _redis_client, _redis_retry_at, _redis_backoff
     if _redis_client is not None:
         await _redis_client.close()
         _redis_client = None
-    _redis_available = True
+    _redis_retry_at = 0.0
+    _redis_backoff = 0.0
     logger.info("Redis connection closed")
