@@ -6,7 +6,12 @@ Uses only in-memory bytes — no disk I/O, no external services.
 import io
 import pytest
 
-from app.services.file_processor import extract_text, MAX_CHARS, SUPPORTED_EXTENSIONS
+from app.services.file_processor import (
+    extract_text,
+    mime_for_filename,
+    MAX_CHARS,
+    SUPPORTED_EXTENSIONS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -203,3 +208,45 @@ def test_supported_extensions_set():
     assert ".md" in SUPPORTED_EXTENSIONS
     assert ".pdf" in SUPPORTED_EXTENSIONS
     assert ".docx" in SUPPORTED_EXTENSIONS
+
+
+# ---------------------------------------------------------------------------
+# MIME derivation
+#
+# The stored MIME is echoed back by GET /api/files/{id}. It must come from the
+# extension we validated, never from the client's Content-Type header, or an
+# uploaded .md full of <script> can be served as HTML on the API origin.
+# ---------------------------------------------------------------------------
+
+def test_mime_for_each_supported_extension():
+    assert mime_for_filename("notes.txt") == "text/plain"
+    assert mime_for_filename("readme.md") == "text/plain"
+    assert mime_for_filename("paper.pdf") == "application/pdf"
+    assert mime_for_filename("report.docx").startswith(
+        "application/vnd.openxmlformats"
+    )
+
+
+def test_mime_is_case_insensitive():
+    assert mime_for_filename("PAPER.PDF") == "application/pdf"
+    assert mime_for_filename("README.MD") == "text/plain"
+
+
+def test_unknown_extension_is_opaque():
+    """Anything unrecognised downloads as bytes rather than rendering."""
+    assert mime_for_filename("payload.html") == "application/octet-stream"
+    assert mime_for_filename("noextension") == "application/octet-stream"
+    assert mime_for_filename("") == "application/octet-stream"
+
+
+def test_no_supported_extension_maps_to_a_renderable_type():
+    """No upload can ever be served as something the browser will execute."""
+    renderable = {"text/html", "application/xhtml+xml", "image/svg+xml",
+                  "application/javascript", "text/javascript"}
+    for ext in SUPPORTED_EXTENSIONS:
+        assert mime_for_filename(f"file{ext}") not in renderable
+
+
+def test_double_extension_uses_the_last_one():
+    """`report.pdf.md` is a Markdown file, and must not claim to be a PDF."""
+    assert mime_for_filename("report.pdf.md") == "text/plain"

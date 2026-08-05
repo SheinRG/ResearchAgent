@@ -8,6 +8,29 @@ logger = logging.getLogger(__name__)
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
 MAX_CHARS = 12000
 
+# MIME is derived from the (already validated) extension and never taken from
+# the client's Content-Type header. That header is attacker-controlled: it used
+# to be stored verbatim and echoed back by GET /api/files/{id}, so uploading a
+# .md whose bytes were `<script>` with `Content-Type: text/html` got it served
+# as HTML on the API origin, where a same-origin fetch of /api/auth/refresh
+# hands over an access token.
+#
+# .md maps to text/plain, not text/markdown, so a browser renders it as text
+# rather than trying to interpret it.
+EXTENSION_MIME_TYPES = {
+    ".txt": "text/plain",
+    ".md": "text/plain",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+
+
+def mime_for_filename(filename: str) -> str:
+    """Safe MIME type for a filename, derived from its extension."""
+    return EXTENSION_MIME_TYPES.get(
+        Path(filename).suffix.lower(), "application/octet-stream"
+    )
+
 
 def extract_text(filename: str, content: bytes) -> str:
     """

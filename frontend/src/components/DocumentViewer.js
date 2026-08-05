@@ -18,6 +18,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
  */
 export default function DocumentViewer({ document, onClose }) {
   const [objectUrl, setObjectUrl] = useState(null);
+  const [loadError, setLoadError] = useState(false);
 
   const isPdf =
     document &&
@@ -29,13 +30,50 @@ export default function DocumentViewer({ document, onClose }) {
     (/\.(txt|md)$/i.test(document.name || "") ||
       (document.mime || "").startsWith("text/"));
 
-  // Create / revoke an object URL for any raw File (live session).
+  // Build a blob URL for the file: straight from the in-memory File in a live
+  // session, or by fetching the persisted bytes for a restored one.
+  //
+  // The fetch is why this isn't just <iframe src={apiUrl}>. /api/files/{id}
+  // requires an Authorization header, and the browser won't attach one to an
+  // iframe or anchor navigation — so the bytes have to come through fetch()
+  // and become a blob URL we own.
   useEffect(() => {
-    if (!document?.file) return;
-    const url = URL.createObjectURL(document.file);
-    setObjectUrl(url);
+    if (!document) return;
+    let cancelled = false;
+    let created = null;
+
+    const publish = (url) => {
+      if (cancelled) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      created = url;
+      setObjectUrl(url);
+    };
+
+    setLoadError(false);
+
+    if (document.file) {
+      publish(URL.createObjectURL(document.file));
+    } else if (document.file_id) {
+      (async () => {
+        try {
+          const token = localStorage.getItem("auth_token");
+          const res = await fetch(`${API_BASE}/api/files/${document.file_id}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const blob = await res.blob();
+          publish(URL.createObjectURL(blob));
+        } catch {
+          if (!cancelled) setLoadError(true);
+        }
+      })();
+    }
+
     return () => {
-      URL.revokeObjectURL(url);
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
       setObjectUrl(null);
     };
   }, [document]);
@@ -52,13 +90,8 @@ export default function DocumentViewer({ document, onClose }) {
 
   if (!document) return null;
 
-  // Remote URL available when the file was persisted server-side.
-  const remoteUrl = document.file_id
-    ? `${API_BASE}/api/files/${document.file_id}`
-    : null;
-
-  // Prefer the local object URL (live session); fall back to the server URL.
-  const fileUrl = objectUrl || remoteUrl;
+  // Always a blob URL we created — never a direct link to the API route.
+  const fileUrl = objectUrl;
 
   // ---- Size formatting -------------------------------------------------
   const sizeLabel =
@@ -106,6 +139,15 @@ export default function DocumentViewer({ document, onClose }) {
         </p>
       </article>
     );
+  } else if (loadError) {
+    body = (
+      <article className="doc-viewer-text">
+        <p style={{ color: "var(--text-tertiary)", fontStyle: "italic" }}>
+          This file couldn&apos;t be loaded. It may belong to another account,
+          or your session may have expired.
+        </p>
+      </article>
+    );
   } else {
     body = (
       <article className="doc-viewer-text">
@@ -117,31 +159,11 @@ export default function DocumentViewer({ document, onClose }) {
   }
 
   // ---- Download button -------------------------------------------------
-  const downloadBtn = document.file ? (
-    // Live session: use the blob object URL (already created above).
+  // One path for both live and restored sessions now that the bytes always
+  // arrive as a blob we hold.
+  const downloadBtn = fileUrl ? (
     <a
-      role="button"
-      className="doc-viewer-btn"
-      onClick={() => {
-        try {
-          const url = objectUrl || URL.createObjectURL(document.file);
-          const a = window.document.createElement("a");
-          a.href = url;
-          a.download = document.name;
-          a.click();
-          if (!objectUrl) setTimeout(() => URL.revokeObjectURL(url), 1000);
-        } catch { /* ignore */ }
-      }}
-      title="Download"
-      aria-label="Download file"
-      style={{ cursor: "pointer" }}
-    >
-      <DownloadIcon width={15} height={15} />
-    </a>
-  ) : remoteUrl ? (
-    // Restored session: real anchor so the browser handles the download.
-    <a
-      href={remoteUrl}
+      href={fileUrl}
       download={document.name}
       className="doc-viewer-btn"
       title="Download"

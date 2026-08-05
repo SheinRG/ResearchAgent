@@ -2,7 +2,11 @@
 import logging
 import uuid
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from app.services.file_processor import extract_text, SUPPORTED_EXTENSIONS
+from app.services.file_processor import (
+    extract_text,
+    mime_for_filename,
+    SUPPORTED_EXTENSIONS,
+)
 from app.routers.auth import get_current_user
 from app.models.database import UploadedFile, get_session_factory
 
@@ -37,7 +41,9 @@ async def upload_file(
         logger.error("File extraction error: %s", e)
         raise HTTPException(status_code=500, detail="Failed to extract text from file.")
 
-    mime = file.content_type or ""
+    # Derived from the validated extension, never from file.content_type — the
+    # client controls that header and this value is served back verbatim.
+    mime = mime_for_filename(file.filename or "")
     file_id = ""
 
     try:
