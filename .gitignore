@@ -36,6 +36,11 @@ tok.tmp
 *.tmp
 scratch-*.txt
 
+# ===== Local-only notes =====
+# This repo is public. Anything named *.local.md stays out of it —
+# SECURITY-NOTES.local.md describes unfixed weaknesses in actionable detail.
+*.local.md
+
 # ===== Logs / OS / Editor =====
 *.log
 npm-debug.log*
