@@ -268,6 +268,28 @@ def compare_to_baseline(summary: dict, baseline: Optional[dict]) -> list[str]:
     return regressions
 
 
+def baseline_update_blocked(summary: dict) -> str:
+    """
+    Why this run must not become the baseline, or "" if it may.
+
+    A baseline is a standing promise that these numbers are acceptable. A run
+    containing a fabricated citation or a crashed query is not acceptable at any
+    number, so it cannot be allowed to set the bar — otherwise the one command
+    that defines "good" is also the one command that can never fail.
+
+    Regressions deliberately do NOT block: moving the bar is the entire purpose
+    of --update-baseline, and a deliberate drop (a cheaper model, a smaller
+    source cap) is a legitimate reason to run it.
+    """
+    failures = summary.get("hard_failures") or {}
+    if failures:
+        return (
+            f"{len(failures)} query/queries violated a hard invariant: "
+            f"{', '.join(sorted(failures))}"
+        )
+    return ""
+
+
 def render_markdown(
     summary: dict, scores: list[QueryScore], regressions: list[str]
 ) -> str:
@@ -365,6 +387,14 @@ async def main_async(args: argparse.Namespace) -> int:
             fh.write(report + "\n")
 
     if args.update_baseline:
+        blocked = baseline_update_blocked(summary)
+        if blocked:
+            print(
+                f"\nRefusing to update the baseline — {blocked}.\n"
+                "Fix those first, then re-run with --update-baseline.",
+                file=sys.stderr,
+            )
+            return 1
         BASELINE_PATH.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print(f"\nBaseline updated: {BASELINE_PATH}")
         return 0

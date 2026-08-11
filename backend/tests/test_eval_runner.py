@@ -19,6 +19,7 @@ import yaml
 
 from evals.run_eval import (
     TOLERANCE,
+    baseline_update_blocked,
     compare_to_baseline,
     load_queries,
     render_markdown,
@@ -211,6 +212,40 @@ class TestCompareToBaseline:
         summary = {metric: 0.0 for metric in TOLERANCE}
         baseline = {metric: 1.0 for metric in TOLERANCE}
         assert len(compare_to_baseline(summary, baseline)) == len(TOLERANCE)
+
+
+# ===========================================================================
+# Accepting a run as the new bar
+# ===========================================================================
+
+class TestBaselineUpdateGuard:
+    """
+    --update-baseline is the command that defines "good". It must not be able to
+    define a broken run as good.
+    """
+
+    def test_clean_run_may_become_the_baseline(self):
+        summary = summarize([make_score("q1")], {"q1": {"id": "q1"}})
+        assert baseline_update_blocked(summary) == ""
+
+    def test_fabricated_citation_blocks_the_update(self):
+        scores = [make_score("q1", draft_answer="Invented [9].")]
+        summary = summarize(scores, {"q1": {"id": "q1"}})
+
+        reason = baseline_update_blocked(summary)
+        assert reason
+        assert "q1" in reason
+
+    def test_errored_run_blocks_the_update(self):
+        score = score_run(spec={"id": "q1", "query": "x"}, final_state={}, error="boom")
+        summary = summarize([score], {"q1": {"id": "q1"}})
+        assert baseline_update_blocked(summary)
+
+    def test_regressions_alone_do_not_block(self):
+        """Deliberately moving the bar down is the whole point of the command."""
+        summary = summarize([make_score("q1")], {"q1": {"id": "q1"}})
+        summary["mean_coverage"] = 0.0
+        assert baseline_update_blocked(summary) == ""
 
 
 # ===========================================================================
