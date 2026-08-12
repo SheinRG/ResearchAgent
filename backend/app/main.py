@@ -12,13 +12,14 @@ from sqlalchemy import text
 from app.config import get_settings
 from app.models.database import init_db, close_db, get_engine
 from app.services.llm import get_llm_client
+from app.services import budget
 from app.services.answer_cache import cache_stats
 from app.services.cache import close_redis, get_redis
 from app.services.embeddings import close_embeddings
 from app.services.scraper import close_scraper
 from app.services.tavily import close_tavily
 from app.services.tracing import init_tracing, is_enabled as tracing_enabled, shutdown_tracing
-from app.routers import auth, research, sessions, upload, notes, files
+from app.routers import auth, demo, research, sessions, upload, notes, files
 
 logging.basicConfig(
     level=logging.INFO,
@@ -116,6 +117,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(demo.router)
 app.include_router(research.router)
 app.include_router(sessions.router)
 app.include_router(upload.router)
@@ -162,11 +164,12 @@ async def health_check():
     is earning its keep; without this it is invisible.
     """
     llm = get_llm_client()
-    llm_ok, db_ok, redis_ok, answer_cache = await asyncio.gather(
+    llm_ok, db_ok, redis_ok, answer_cache, spend = await asyncio.gather(
         llm.health_check(),
         _check_db(),
         _check_redis(),
         cache_stats(),
+        budget.current_spend(),
     )
 
     body = {
@@ -177,5 +180,9 @@ async def health_check():
         "redis": "connected" if redis_ok else "unavailable",
         "answer_cache": answer_cache,
         "tracing": "enabled" if tracing_enabled() else "disabled",
+        # Where the free-tier allowance stands, and which store answered. A
+        # guard reading a stale Redis baseline still works, but you want to
+        # know that is what is happening before the month runs out.
+        "budget": spend.as_dict(),
     }
     return JSONResponse(content=body, status_code=200 if db_ok else 503)

@@ -23,6 +23,13 @@ totals are visible to both sides.
 
 Cost is derived from a static price table and is a good-faith estimate for
 display, not a billing figure. See :data:`MODEL_PRICES`.
+
+The same accumulator also counts **search credits**. Tokens are not the scarce
+resource here — Groq's free tier throttles and recovers, while Tavily's 1,000
+credits per month do not come back until the month rolls over. The credit count
+is therefore what the spend ceiling in ``services.budget`` actually gates on,
+and it is counted rather than inferred from ``len(sub_queries)`` because a
+search served from the Redis cache is billed nothing.
 """
 
 from __future__ import annotations
@@ -65,6 +72,20 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
 }
 
 _PRICE_UNIT_TOKENS = 1_000_000
+
+# Tavily bills per search, by depth. One sub-query = one search, so a four
+# sub-query research run costs four credits at basic depth and eight at
+# advanced. Serper's free tier is counted the same way (its 2,500 lifetime
+# queries are scarcer still per unit).
+SEARCH_CREDITS_PER_CALL: dict[str, int] = {
+    "basic": 1,
+    "advanced": 2,
+}
+
+
+def search_credits_for(depth: str) -> int:
+    """Credits billed by one search at ``depth``. Unknown depths cost 1."""
+    return SEARCH_CREDITS_PER_CALL.get(depth, 1)
 
 # Models already warned about, so a missing price logs once per process rather
 # than once per request.
@@ -124,7 +145,17 @@ class UsageAccumulator:
     completion_tokens: int = 0
     total_tokens: int = 0
     cost_usd: float = 0.0
+    # Billable search-provider calls this request made, and what they cost in
+    # provider credits. Both stay zero for a cached search, a document-only
+    # question, or an answer-cache hit — all of which are genuinely free.
+    searches: int = 0
+    search_credits: int = 0
     by_stage: dict[str, StageUsage] = field(default_factory=dict)
+
+    def add_search(self, credits: int) -> None:
+        """Record one billable search costing ``credits``. Never raises."""
+        self.searches += 1
+        self.search_credits += max(0, int(credits))
 
     def add(self, usage: TokenUsage) -> None:
         """Fold one call's usage into the totals. Never raises."""
@@ -155,6 +186,8 @@ class UsageAccumulator:
             # 6dp: a cheap 8B triage call costs ~$0.00002, and rounding that to
             # zero would make the per-stage breakdown useless.
             "cost_usd": round(self.cost_usd, 6),
+            "searches": self.searches,
+            "search_credits": self.search_credits,
             "by_stage": {name: s.as_dict() for name, s in self.by_stage.items()},
         }
 
@@ -209,6 +242,24 @@ def record_usage(usage: TokenUsage) -> None:
         accumulator.add(usage)
     except Exception as e:  # pragma: no cover — defensive
         logger.warning("Usage accounting failed (ignored): %s", e)
+
+
+def record_search(depth: str = "basic") -> None:
+    """
+    Ambient observer for one *billable* search — call it only on a cache miss.
+
+    Same contract as :func:`record_usage`: a no-op outside a scope, and never
+    raises. Credit accounting must not be able to fail a research run; the
+    budget guard treats an under-count as spend it will notice on the next
+    request, which is strictly better than a 500 on the search path.
+    """
+    accumulator = _current.get()
+    if accumulator is None:
+        return
+    try:
+        accumulator.add_search(search_credits_for(depth))
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("Search credit accounting failed (ignored): %s", e)
 
 
 def empty_usage() -> dict:

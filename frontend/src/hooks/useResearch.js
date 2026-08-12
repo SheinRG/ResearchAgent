@@ -34,6 +34,11 @@ export default function useResearch() {
   const [isDone, setIsDone] = useState(false);
   const [doneData, setDoneData] = useState(null);
   const [error, setError] = useState(null);
+  // A run the server declined to start, as opposed to one that failed. Kept
+  // separate from `error` because the UI response is different: nothing is
+  // broken, so the copy explains a limit and offers a way forward rather than
+  // apologising. `kind` is "paused" (spend ceiling) or "limit" (free queries).
+  const [blocked, setBlocked] = useState(null);
 
   const abortRef = useRef(null);
   // Mirror the streamed values in refs so that, the instant the run completes,
@@ -45,6 +50,7 @@ export default function useResearch() {
   const followUpsRef = useRef([]);
   const queryRef = useRef("");
   const errorRef = useRef(null);
+  const blockedRef = useRef(null);
   const onCompleteRef = useRef(null);
 
   const handleEvent = useCallback((type, data) => {
@@ -98,13 +104,39 @@ export default function useResearch() {
         setFollowUps(followUpsRef.current);
         break;
 
+      // Live research is off — the spend ceiling was reached. Cached answers
+      // still stream normally, so this only ever follows a cache miss.
+      case "paused":
+        blockedRef.current = {
+          kind: "paused",
+          code: data.code || "",
+          message: data.message || "Live research is paused right now.",
+          signinHelps: !!data.signin_helps,
+        };
+        setBlocked(blockedRef.current);
+        break;
+
+      // The visitor spent their last free query between the pre-flight check
+      // and this run — two tabs racing. Same wall, reached a moment later.
+      case "limit":
+        blockedRef.current = {
+          kind: "limit",
+          code: data.code || "demo_quota_exhausted",
+          message: data.message || "You've used your free queries.",
+          limit: data.limit,
+          signinHelps: true,
+        };
+        setBlocked(blockedRef.current);
+        break;
+
       case "done":
         setIsDone(true);
         setDoneData(data);
         setPhase("done");
-        setPhaseMessage("Research complete");
-        // Only hand off a finished turn when the run actually produced one.
-        if (!errorRef.current && onCompleteRef.current) {
+        setPhaseMessage(data.paused ? "Live research paused" : "Research complete");
+        // Only hand off a finished turn when the run actually produced one — a
+        // declined run has no answer to persist into the session history.
+        if (!errorRef.current && !blockedRef.current && onCompleteRef.current) {
           onCompleteRef.current({
             query: queryRef.current,
             answer: answerRef.current,
@@ -239,6 +271,8 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     setIsDone(false);
     setDoneData(null);
     setError(null);
+    setBlocked(null);
+    blockedRef.current = null;
 
     // Reset the snapshot refs for this run and remember the completion handler.
     answerRef.current = "";
@@ -266,6 +300,10 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
       const response = await fetch(`${API_BASE}/api/research`, {
         method: "POST",
         headers,
+        // Carries the anonymous visitor cookie. Without it every demo query
+        // would look like a new visitor and the allowance would never count
+        // down — the frontend and API are separate origins in production.
+        credentials: "include",
         body: JSON.stringify({
           query,
           max_iterations: maxIterations,
@@ -309,12 +347,29 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
           return;
         }
         if (response.status === 429) {
+          // Two different 429s reach here. A demo visitor out of free queries
+          // gets a structured detail and a signup wall; a signed-in user has
+          // hit the hourly cap and just needs to wait.
+          if (detail?.code === "demo_quota_exhausted") {
+            blockedRef.current = {
+              kind: "limit",
+              code: detail.code,
+              message: detail.message || "You've used your free queries.",
+              limit: detail.limit,
+              signinHelps: true,
+            };
+            setBlocked(blockedRef.current);
+            return;
+          }
           throw new Error("rate_limit:Query limit reached for this hour. Your quota resets every 60 minutes — check the sidebar for remaining queries.");
         }
         if (response.status === 503 || response.status === 502) {
           throw new Error("The research server is temporarily unavailable. Please try again in a moment.");
         }
-        throw new Error(detail || `The server responded with an error (${response.status}).`);
+        // `detail` is a structured object for some errors (see the 429 above),
+        // and "[object Object]" is not an error message.
+        const detailText = typeof detail === "string" ? detail : detail?.message || "";
+        throw new Error(detailText || `The server responded with an error (${response.status}).`);
       }
 
       const reader = response.body.getReader();
@@ -388,6 +443,7 @@ In conclusion, scaling **${query}** remains a top priority for teams looking to 
     isDone,
     doneData,
     error,
+    blocked,
     // Actions
     startResearch,
     stopResearch,

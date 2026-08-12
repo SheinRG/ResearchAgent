@@ -551,6 +551,99 @@ body::before {
 }
 
 /* ============================================================
+   ANONYMOUS DEMO — free-query allowance and the spend-ceiling banner
+   ============================================================ */
+
+/* Shown when the spend ceiling is up. Warning, not error: nothing is broken,
+   the cache still answers, and live research comes back on its own. */
+.demo-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-lg);
+    padding: 10px 14px;
+    border-radius: var(--radius-full);
+    background: var(--warning-bg);
+    border: 1px solid rgba(214, 161, 74, 0.28);
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.demo-banner-dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--warning);
+}
+
+.demo-banner-link {
+    color: var(--text-primary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    white-space: nowrap;
+}
+
+/* The running count, kept quiet — it is a footnote under the search box, not
+   a countdown clock pressuring the visitor. */
+.demo-quota {
+    margin-top: var(--space-md);
+    color: var(--text-tertiary);
+    font-size: 0.76rem;
+}
+
+.demo-quota-link {
+    color: var(--text-secondary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.demo-quota-link:hover {
+    color: var(--text-primary);
+}
+
+/* The signup wall, shown in place of the suggestion chips once the allowance
+   is spent — offering the next step rather than an error. */
+.demo-wall {
+    margin-top: var(--space-md);
+    padding: var(--space-lg);
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+}
+
+.demo-wall-title {
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.demo-wall-sub {
+    margin-top: 6px;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.5;
+}
+
+.demo-wall-cta {
+    display: inline-flex;
+    align-items: center;
+    margin-top: var(--space-md);
+    padding: 9px 18px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    color: var(--accent-contrast);
+    font-size: 0.82rem;
+    font-weight: 500;
+    transition: background var(--transition-fast);
+}
+
+.demo-wall-cta:hover {
+    background: var(--accent-hover);
+}
+
+/* ============================================================
    RESEARCH THREAD
    ============================================================ */
 

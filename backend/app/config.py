@@ -146,6 +146,53 @@ class Settings(BaseSettings):
     # --- Rate Limiting ---
     rate_limit_per_hour: int = 30  # research queries per user per hour
 
+    # --- Anonymous demo mode ---
+    # Logged-out visitors can run real research without registering, because a
+    # product pitched on "watch it show its work" should not make you sign up
+    # before you can watch it work.
+    #
+    # The per-visitor number is a *conversion* limit, not a cost limit — the
+    # ceilings below are what protect the budget. It is small on purpose: nobody
+    # runs 30 research queries on a stranger's demo, so a 30-query wall is one
+    # nobody ever reaches, and a signup gate nobody reaches converts nobody.
+    # Three is roughly where a visitor is still interested when they hit it.
+    anonymous_demo_enabled: bool = True
+    anon_free_queries: int = 3          # per visitor (cookie), rolling 24h
+    # Higher, because this is keyed by IP and offices, campuses and mobile
+    # carriers share one. It exists to blunt cookie-clearing, not to be precise:
+    # X-Forwarded-For is spoofable, so the global ceilings below — which are not
+    # bypassable by construction — remain the real guard.
+    anon_free_queries_per_ip: int = 10  # per IP, rolling 24h
+
+    # --- Spend ceiling (see services/budget.py) ---
+    # Sized against Tavily's 1,000 credits/month free tier, which is the binding
+    # constraint: Groq's free tier throttles and recovers within the hour, but a
+    # spent search credit is gone until the month rolls over.
+    #
+    #   1,000/month  -  ~240 for the weekly eval run  -  ~160 headroom
+    #   = ~600/month of serving budget.
+    #
+    # One research turn bills up to max_sub_queries × depth = 4 credits, so 600
+    # is roughly 150 live runs a month. That sounds small, and it is — the
+    # answer cache is what makes it work. Logged-out traffic is highly
+    # correlated (everyone tries the same few questions), and a cache hit costs
+    # zero credits and zero tokens. The daily allowance is really a
+    # cache-warming budget; the cache does the serving.
+    budget_guard_enabled: bool = True
+    monthly_search_credits: int = 600
+    # 6× the 20/day monthly average, on purpose: a launch day should be allowed
+    # to burst. The monthly ceiling means you cannot burst every day — about
+    # five heavy days and it stops, which is the intended trade.
+    daily_search_credits: int = 120
+    # The demo's sub-pool of the daily allowance (~10 live runs), so a spike of
+    # logged-out visitors throttles itself before it can starve signed-in users.
+    # Raise this for a launch day; the monthly ceiling still backstops it.
+    anon_daily_search_credits: int = 40
+    # Backstop against a model swap making tokens expensive. Not the binding
+    # constraint at current prices — ~$0.003/run means the credit ceilings bite
+    # first — but it is what catches groq_synth_model pointing somewhere pricey.
+    daily_cost_budget_usd: float = 0.25
+
     # --- Server ---
     host: str = "0.0.0.0"
     port: int = 8000

@@ -7,6 +7,7 @@ import ResearchTurn from "@/components/ResearchTurn";
 import DocumentViewer from "@/components/DocumentViewer";
 import SessionHeader from "@/components/SessionHeader";
 import SkeletonLoader from "@/components/SkeletonLoader";
+import useDemo from "@/hooks/useDemo";
 import useResearch from "@/hooks/useResearch";
 import useResearchStore from "@/stores/researchStore";
 import { useAuth } from "@/hooks/useAuth";
@@ -30,8 +31,11 @@ function ResearchContent() {
     trace,
     isStreaming,
     error,
+    blocked,
     startResearch,
   } = useResearch();
+
+  const demo = useDemo();
 
   const { addRecentSearch, bumpSessions, consumePendingDocuments } = useResearchStore();
 
@@ -63,14 +67,16 @@ function ResearchContent() {
   const loadedSessionRef = useRef(null);
   const liveRef          = useRef(null);
   const activeDocsRef    = useRef([]);
+  // Held in a ref so handleComplete can refresh the quota without taking the
+  // demo hook as a dependency — it re-runs on every status change, and
+  // rebuilding the completion handler mid-stream would drop the turn.
+  const demoRefreshRef   = useRef(null);
+  demoRefreshRef.current = demo.refresh;
 
-  // Only redirect to login when trying to run a new query without auth.
-  // Shared session links (?session=) are public and work without login.
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated && !sessionId) {
-      router.push("/login");
-    }
-  }, [isAuthenticated, isLoading, router, sessionId]);
+  // No login redirect. Logged-out visitors get a free-query allowance, and the
+  // server is what enforces it — bouncing them here would just recreate the
+  // signup wall that anonymous demo mode exists to remove. A visitor who is out
+  // of queries gets the wall below, after seeing the answers they did get.
 
   // ---------------------------------------------------------------------------
   // handleComplete — freeze a finished SSE run into the thread
@@ -95,6 +101,9 @@ function ResearchContent() {
     setActiveQuery(null);
     // Tell the sidebar to re-fetch the sessions list so this thread appears.
     bumpSessions();
+    // A demo visitor just spent one of their free queries — re-read the count
+    // so the footnote and the wall reflect what they have left.
+    demoRefreshRef.current?.();
   }, [bumpSessions]);
 
   // ---------------------------------------------------------------------------
@@ -229,7 +238,6 @@ function ResearchContent() {
 
   // For shared sessions, unauthenticated visitors are allowed to view.
   if (isLoading && !sessionId) return null;
-  if (!isAuthenticated && !sessionId) return null;
 
   // Show a full-page skeleton while the stored thread is being fetched.
   if (sessionLoading) {
@@ -304,7 +312,42 @@ function ResearchContent() {
           </div>
         )}
 
-        {hasThread && isAuthenticated && (
+        {/* A run the server declined. Distinct from `error` on purpose:
+            nothing broke, so this explains the limit and offers the next step
+            instead of apologising. */}
+        {blocked && (
+          <div className="demo-wall" role="status">
+            <p className="demo-wall-title">
+              {blocked.kind === "limit"
+                ? "That's your free queries for now."
+                : "Live research is paused."}
+            </p>
+            <p className="demo-wall-sub">{blocked.message}</p>
+            {blocked.signinHelps && (
+              <a href="/login" className="demo-wall-cta">
+                Sign in to continue
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Out of free queries — the wall replaces the composer rather than
+            sitting above a box that would only 429. */}
+        {hasThread && !blocked && !isAuthenticated && demo.isExhausted && (
+          <div className="demo-wall">
+            <p className="demo-wall-title">
+              That&apos;s your {demo.limit} free queries.
+            </p>
+            <p className="demo-wall-sub">
+              Sign in to ask follow-ups and keep your research — it&apos;s free.
+            </p>
+            <a href="/login" className="demo-wall-cta">
+              Sign in to continue
+            </a>
+          </div>
+        )}
+
+        {hasThread && !blocked && !(!isAuthenticated && demo.isExhausted) && (
           <div className="followup-composer">
             <SearchBar
               onSearch={submitQuery}
@@ -313,15 +356,16 @@ function ResearchContent() {
               disabled={isStreaming || Boolean(activeQuery)}
               clearOnSubmit
             />
-          </div>
-        )}
-
-        {hasThread && !isAuthenticated && (
-          <div className="shared-session-cta">
-            <p>Want to ask follow-up questions or save your own research?</p>
-            <a href="/login" className="btn-accent" style={{ display: "inline-block", padding: "8px 20px", borderRadius: 8, textDecoration: "none", fontSize: 14 }}>
-              Sign in to continue
-            </a>
+            {!isAuthenticated && typeof demo.remaining === "number" && (
+              <p className="demo-quota">
+                {demo.remaining} of {demo.limit} free{" "}
+                {demo.limit === 1 ? "query" : "queries"} left ·{" "}
+                <a href="/login" className="demo-quota-link">
+                  Sign in
+                </a>{" "}
+                for more
+              </p>
+            )}
           </div>
         )}
       </div>

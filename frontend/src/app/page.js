@@ -2,8 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import SearchBar from "@/components/SearchBar";
 import { useAuth } from "@/hooks/useAuth";
+import useDemo from "@/hooks/useDemo";
 import useResearchStore from "@/stores/researchStore";
 
 // Time-aware openers, framed for someone here to *work* — late hours nudge
@@ -51,6 +53,7 @@ const ROTATE_MS = 6000;
 export default function HomePage() {
   const router = useRouter();
   const { user, isAuthenticated, isLoading } = useAuth();
+  const demo = useDemo();
   const setPendingDocuments = useResearchStore((s) => s.setPendingDocuments);
 
   // Greeting depends on the client clock, so resolve after mount to avoid a
@@ -119,11 +122,10 @@ export default function HomePage() {
     ? Array.from({ length: VISIBLE_COUNT }, (_, i) => pool[(start + i) % pool.length])
     : [];
 
-  useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push("/login");
-    }
-  }, [isAuthenticated, isLoading, router]);
+  // No redirect to /login. A product whose whole pitch is "watch it show its
+  // work" cannot make you register before you can watch it work — logged-out
+  // visitors get a small allowance of real queries instead. The server owns
+  // that limit; see backend/app/services/anonymous.py.
 
   const handleSearch = (query, documents) => {
     // If the search comes with file documents, stage them in the store so
@@ -134,16 +136,36 @@ export default function HomePage() {
     router.push(`/research?q=${encodeURIComponent(query)}`);
   };
 
-  if (isLoading || !isAuthenticated) return null;
+  // Only the auth bootstrap gates the render. The demo status arrives a moment
+  // later and only adds a pill and a banner, so waiting on it would delay the
+  // hero for every visitor to show a line of small print.
+  if (isLoading) return null;
 
   // Prefer the user's personalized name; fall back to their first name.
   const realName = user?.preferred_name?.trim() || user?.name?.split(" ")[0];
   // During the welcome window, show "bade bhai" in place of the real name.
   const shownName = welcomeName ?? realName;
 
+  const showQuota =
+    !isAuthenticated && !demo.isLoading && typeof demo.remaining === "number";
+
   return (
     <main className="home-hero">
       <div className="home-hero-inner">
+        {/* The spend ceiling is up. Cached answers still work, so this says
+            what is actually true rather than hiding the search box. */}
+        {demo.livePaused ? (
+          <div className="demo-banner" role="status">
+            <span className="demo-banner-dot" aria-hidden="true" />
+            <span>{demo.liveMessage}</span>
+            {demo.liveReason === "anon_daily" ? (
+              <Link href="/login" className="demo-banner-link">
+                Sign in
+              </Link>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="home-greeting">
           <h1 className="home-greeting-title">
             {greeting}
@@ -165,21 +187,46 @@ export default function HomePage() {
         <div className="home-search">
           <SearchBar onSearch={handleSearch} mode="large" />
 
-          <div
-            className="suggestion-row"
-            style={{ opacity: chipsOpacity, transition: "opacity 0.25s ease" }}
-          >
-            {suggestions.map((ex) => (
-              <button
-                key={ex}
-                type="button"
-                className="suggestion-chip"
-                onClick={() => handleSearch(ex)}
-              >
-                {ex}
-              </button>
-            ))}
-          </div>
+          {showQuota && demo.isExhausted ? (
+            <div className="demo-wall">
+              <p className="demo-wall-title">
+                That&apos;s your {demo.limit} free queries.
+              </p>
+              <p className="demo-wall-sub">
+                Sign in to keep going — it&apos;s free, and your research gets
+                saved so you can come back to it.
+              </p>
+              <Link href="/login" className="demo-wall-cta">
+                Sign in
+              </Link>
+            </div>
+          ) : (
+            <div
+              className="suggestion-row"
+              style={{ opacity: chipsOpacity, transition: "opacity 0.25s ease" }}
+            >
+              {suggestions.map((ex) => (
+                <button
+                  key={ex}
+                  type="button"
+                  className="suggestion-chip"
+                  onClick={() => handleSearch(ex)}
+                >
+                  {ex}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {showQuota && !demo.isExhausted ? (
+            <p className="demo-quota">
+              {demo.remaining} of {demo.limit} free {demo.limit === 1 ? "query" : "queries"} left ·{" "}
+              <Link href="/login" className="demo-quota-link">
+                Sign in
+              </Link>{" "}
+              for more
+            </p>
+          ) : null}
         </div>
       </div>
     </main>

@@ -48,29 +48,57 @@ r/LocalLLaMA reward rigour over polish; users trust a tool that shows sources.
 
 ## 3. Two decisions worth not re-litigating
 
-### 3.1 The demo is recorded, not live
+### 3.1 The demo is live, behind a fuse
 
-The biggest product gap is real: `frontend/src/app/page.js` redirects to
-`/login` before anything renders, so a "watch it work" product makes you
-register before you can watch it work.
+*Revised 2026-08-12. This section previously read "the demo is recorded, not
+live." The objection that drove that call was arithmetic, and it was correct —
+what changed is that the arithmetic now has a guard behind it rather than a
+prohibition in front of it. The original reasoning is kept below because it is
+still what constrains the design.*
 
-The obvious fix — anonymous live queries — is a trap on $0. Roughly 500 launch
-visitors × 1 query is ~500 Groq synthesis calls and 500–1500 Tavily credits in
-an hour, against a monthly free allowance. The demo dies during the exact spike
-that matters, and everyone arriving after that sees a broken app.
+The biggest product gap was real: `frontend/src/app/page.js` redirected to
+`/login` before anything rendered, so a "watch it work" product made you
+register before you could watch it work.
+
+The naive fix — unlimited anonymous queries — is still a trap on $0. One run
+bills up to 4 Tavily credits against a **1,000/month** free tier, so ~250 runs
+is the entire month. A generous per-visitor allowance is the version that dies
+fastest: at 30 free queries, **nine visitors** spend the month. And 30 is
+self-defeating on its own terms — nobody runs 30 research queries on a
+stranger's demo, so it is a wall nobody reaches, and a signup gate nobody
+reaches converts nobody.
 
 > A signup gate says you made a product call someone disagrees with.
 > A dead demo says you can't run a service.
 
-**Decision:** record 6–8 curated runs once, by hand; commit the full SSE event
-sequence as JSON fixtures; replay them on the logged-out landing page with
-realistic token timing. Zero LLM calls, zero search calls, $0 at unbounded
-concurrency. The replay machinery already exists — a cache hit already replays
-a full SSE sequence.
+**Decision:** anonymous visitors get **3 real queries**, and three independent
+limits keep that survivable. Each does a different job, which is why none of
+them can be dropped:
 
-It earns its place because **those fixtures are also the corpus for PR-level
-evals and the source footage for the README GIF.** One recording session,
-three deliverables.
+| Limit | Job | Default |
+|---|---|---|
+| Per visitor (cookie) | *Conversion.* Where someone hits the wall while still interested. | 3 / 24h |
+| Per IP | Blunts cookie-clearing. Loose, because offices share an address. | 10 / 24h |
+| Global daily + monthly credits | *Cost.* Not bypassable by minting identities. | 120/day, 600/month |
+| Anonymous sub-pool | Stops a demo spike starving signed-in users. | 40/day |
+
+**The answer cache is what makes 600/month enough.** Logged-out traffic is
+highly correlated — everyone tries the same few questions — and a cache hit
+costs zero credits and zero tokens. The daily allowance is really a
+*cache-warming* budget; the cache does the serving. This is also why a cache
+hit spends a visitor's free query but never touches the credit pool: the
+per-visitor number is a product decision, the pool is a cost one.
+
+On breach it **degrades to cache-only with an honest banner, never a 503** —
+every answer already cached still works. The guard reads Postgres
+(`research_queries.search_credits`, added for this) as ground truth with Redis
+only a 60s cache in front, and **denies live research when it cannot establish
+spend at all**. An unreadable budget is not an unspent one.
+
+The recorded fixtures are still worth building, for the other two things they
+buy: **the corpus for PR-level evals and the source footage for the README
+GIF** — plus a third now, pre-warming the cache before a launch so the first
+visitors hit it instead of the credit pool.
 
 Known limits, verified in code:
 - `ResearchQuery` has **no images column**, so a restored/shared session has an
@@ -106,6 +134,12 @@ grant" is a senior answer. "Every session is public if you know the URL" is not.
   fetches with an `Authorization` header and builds its own blob URL.
   *Behaviour change:* a shared session no longer serves its attached documents
   to the recipient. That's correct — the answer is shareable, the file isn't.
+- **Anonymous demo mode + the spend ceiling** — the landing page no longer
+  redirects to `/login`. Logged-out visitors get 3 real queries, guarded by
+  `services/budget.py` (Postgres-backed, fails closed, degrades to cache-only)
+  and `services/anonymous.py` (per-visitor and per-IP allowances, both
+  fail-closed). Tier 0 item 2 is subsumed by this. See §3.1 for the sizing and
+  why 3 rather than 30.
 
 ## 5. Tier 0 — before anything goes public (~9 hrs remaining)
 
@@ -115,7 +149,7 @@ broken, illegal, or exploitable.
 | # | Item | Hrs | Goals | Why |
 |---|---|---|---|---|
 | 1 | Add a real `LICENSE` file (MIT) | 0.25 | ALL | `README.md` claims MIT but **no LICENSE file exists**, so the repo is legally all-rights-reserved. Nobody can use or contribute. Every OSS item below is void until this exists. |
-| 2 | Global daily spend ceiling | 6 | USERS, JOB | See below — the design matters more than the feature. |
+| 2 | ~~Global daily spend ceiling~~ — **done**, see §4 | — | — | Built as `services/budget.py` when anonymous demo mode needed it. The design notes below still describe what shipped. |
 | 3 | Harden upload limits (see local security notes) | 1 | JOB | Memory-footprint hardening on a small instance. |
 | 4 | Fix the fake delete button (`SessionHeader.js`) | 0.5 | USERS | Shows "Session deleted", navigates away, never calls the API. A delete that lies is worse than no delete. |
 | 5 | Repo description, topics, social preview image | 1 | OSS | The description reads "A Perplexity AI clone" — that sentence costs stars on every link preview before anyone opens the README. |
@@ -141,6 +175,14 @@ Redis, fall through to Postgres, **never** to "unspent". If Postgres is also
 unreachable, deny new research. On breach, **degrade to cache-only with an
 honest banner — never hard-503.** Separately, switch to `volatile-lru`.
 
+**One correction from building it:** dollars turned out to be the *backstop*,
+not the ceiling. Groq's free tier rate-limits and recovers within the hour;
+a spent Tavily credit is gone until the month rolls over. So the guard gates on
+a new `research_queries.search_credits` column — counted, not inferred from
+`len(sub_queries)`, because a search served from the Redis cache is billed
+nothing — and keeps the dollar ceiling only to catch `GROQ_SYNTH_MODEL` being
+pointed somewhere expensive.
+
 *"We degrade instead of falling over" is a materially better interview answer
 than "we rate-limit."*
 
@@ -151,8 +193,8 @@ than "we rate-limit."*
 | Item | Hrs | Goals |
 |---|---|---|
 | Record 6–8 demo fixtures (SSE captures) — do this first, three things depend on it | 6 | ALL |
+| ~~Anonymous demo mode (replay fixtures, zero cost)~~ — **done**, and live rather than replayed; see §3.1 and §4 | — | — |
 | README rewrite: GIF above the fold, live demo link in the first 3 lines, one blunt differentiation paragraph, evals pulled out of the war-story section into a "why this is production-grade" block near the top | 8 | ALL |
-| Anonymous demo mode (replay fixtures, zero cost) | 5 | USERS, OSS |
 | Explicit revocable share tokens for sessions (§3.2) | 5 | USERS, JOB |
 | Return `sub_queries` from `GET /api/sessions/{id}` | 0.5 | USERS |
 | Retry + backoff on Serper/Tavily — both currently return `[]` silently on any failure | 1 | USERS |
