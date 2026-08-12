@@ -35,6 +35,11 @@ jobs:
   eval:
     name: Run eval set
     runs-on: ubuntu-latest
+    # Needed only by the "Commit updated baseline" step below. The default
+    # GITHUB_TOKEN is read-only, so without this the push fails and the button
+    # silently does nothing.
+    permissions:
+      contents: write
     # Cold Groq + Tavily calls across 20 queries, plus a FlashRank model
     # download on first use. Generous ceiling so a slow provider does not
     # look like a failure.
@@ -105,5 +110,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add evals/baseline.json
-          git commit -m "chore(evals): update baseline from scheduled run"
+          # [skip render] because render.yaml has autoDeploy on main: without it
+          # a numbers-only commit redeploys production for no reason.
+          git commit -m "chore(evals): update baseline from scheduled run [skip render]"
           git push
