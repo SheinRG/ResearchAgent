@@ -6,6 +6,7 @@ Also exports get_current_user and check_rate_limit for use by other routers.
 import time
 import uuid
 import logging
+from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException, Depends, Request, Response
 from sqlalchemy import select
@@ -30,6 +31,7 @@ from app.services.auth import (
     validate_and_rotate_refresh_token,
     revoke_refresh_token,
 )
+from app.services.anonymous import new_anon_id, read_anon_id
 from app.services.cache import get_redis
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,55 @@ async def get_current_user(request: Request) -> dict:
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return payload
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Who is making a request — a signed-in user or a demo visitor."""
+
+    user_id: str = ""
+    email: str = ""
+    name: str = ""
+    is_anonymous: bool = False
+    anon_id: str = ""
+
+    @property
+    def label(self) -> str:
+        """Something safe to put in a log line — never a full visitor id."""
+        if self.is_anonymous:
+            return f"anon:{self.anon_id[:8]}" if self.anon_id else "anon"
+        return self.email or self.user_id or "user"
+
+
+async def get_principal(request: Request) -> Principal:
+    """
+    Resolve the caller, allowing logged-out demo visitors through.
+
+    A *missing* Authorization header means a demo visitor. A *present but
+    invalid* one is still a 401: someone whose access token just expired should
+    get the silent-refresh path, not a quiet demotion into the demo's three-query
+    allowance — that would look like the app randomly forgetting their session.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        payload = validate_token(auth_header[7:])
+        if payload is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        return Principal(
+            user_id=payload.get("sub", ""),
+            email=payload.get("email", ""),
+            name=payload.get("name", ""),
+        )
+
+    if not get_settings().anonymous_demo_enabled:
+        raise HTTPException(
+            status_code=401, detail="Missing or invalid authorization header"
+        )
+
+    return Principal(
+        is_anonymous=True,
+        anon_id=read_anon_id(request) or new_anon_id(),
+    )
 
 
 _RATE_WINDOW_SECONDS = 3600

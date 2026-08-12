@@ -73,6 +73,10 @@ class ResearchQuery(Base):
     invalid_citations = Column(Integer, default=0)   # [n] markers with no such source
     total_tokens = Column(Integer, default=0)        # across every LLM call in the turn
     cost_usd = Column(Float, default=0.0)            # estimated; see services.usage
+    # Billable search-provider credits, excluding searches served from cache.
+    # This is what services.budget gates on: Groq throttles and recovers, but a
+    # spent Tavily credit is gone until the month rolls over.
+    search_credits = Column(Integer, default=0)
     # Reasoning trace (ranked sources + scores + cited/sent/considered status).
     # Stored so reopening an old thread shows the same working, not just the answer.
     trace = Column(JSON, default=dict)
@@ -258,6 +262,18 @@ async def init_db() -> None:
             )
             await conn.execute(
                 text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS trace JSON")
+            )
+            await conn.execute(
+                text("ALTER TABLE research_queries ADD COLUMN IF NOT EXISTS search_credits INTEGER DEFAULT 0")
+            )
+            # The budget guard sums today's (and this month's) spend on every
+            # cold request. Without this index that is a sequential scan of the
+            # whole table, on the hot path, on a free-tier instance.
+            await conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_research_queries_created_at "
+                    "ON research_queries (created_at)"
+                )
             )
         logger.info("Database tables created successfully")
     except Exception as e:

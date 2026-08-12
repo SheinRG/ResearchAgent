@@ -89,7 +89,14 @@ services:
   - type: redis
     name: goon-redis
     plan: free
-    maxmemoryPolicy: allkeys-lru
+    # volatile-lru, not allkeys-lru: only keys with a TTL may be evicted. Under
+    # allkeys-lru the demo's free-query counters and the budget guard's
+    # in-flight reservations were as evictable as a cached search result, so
+    # memory pressure would quietly hand out extra free queries. Nothing here
+    # is written without a TTL, so this costs no headroom — and the spend
+    # ceiling reads Postgres as its source of truth regardless, precisely so a
+    # cache eviction can never raise the budget.
+    maxmemoryPolicy: volatile-lru
     ipAllowList: []                # internal-only access
 
 # No `databases:` block on purpose. Render's free Postgres expires after 30 days

@@ -8,7 +8,7 @@ import asyncio
 import logging
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from typing import AsyncGenerator
 
@@ -16,7 +16,14 @@ from app.config import get_settings
 from app.models.schemas import ResearchRequest
 from app.models.database import User, ResearchSession, ResearchQuery, get_session_factory
 from app.agents.graph import get_research_graph
-from app.routers.auth import get_current_user, check_rate_limit
+from app.routers.auth import Principal, get_principal, check_rate_limit
+from app.services import budget
+from app.services.anonymous import (
+    consume_quota,
+    peek_quota,
+    read_anon_id,
+    set_anon_cookie,
+)
 from app.services.answer_cache import (
     build_answer_key,
     build_bucket_key,
@@ -83,6 +90,10 @@ async def _save_session(
                 invalid_citations=final_state.get("invalid_citations", 0),
                 total_tokens=(usage or {}).get("total_tokens", 0),
                 cost_usd=(usage or {}).get("cost_usd", 0.0),
+                # Ground truth for the spend ceiling. Written here, on the same
+                # row as the answer, so the budget can never be read from a
+                # store that is allowed to evict it.
+                search_credits=(usage or {}).get("search_credits", 0),
                 trace=final_state.get("trace") or {},
             )
             db.add(research_query)
@@ -93,27 +104,86 @@ async def _save_session(
 
 
 @router.post("/research")
-async def research(request: ResearchRequest, user: dict = Depends(get_current_user)):
-    user_id = user.get("sub", "")
-    logger.info("Research request from %s: %s", user.get("email"), request.query[:100])
-    await check_rate_limit(user_id)
+async def research(
+    request: ResearchRequest,
+    http_request: Request,
+    principal: Principal = Depends(get_principal),
+):
+    user_id = principal.user_id
+    logger.info("Research request from %s: %s", principal.label, request.query[:100])
+
+    if principal.is_anonymous:
+        # Checked before anything is done, and read-only: a visitor who is
+        # turned away here must not have a free query deducted for it. The
+        # spend ceiling is checked later, on a cache miss, because a cached
+        # answer costs nothing and should be served even when live runs are
+        # paused.
+        quota = await peek_quota(http_request, principal.anon_id)
+        if quota.exhausted:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "demo_quota_exhausted",
+                    "limit": quota.limit,
+                    "message": (
+                        f"You've used your {quota.limit} free queries. "
+                        "Sign in to keep going — it's free."
+                    ),
+                },
+            )
+    else:
+        await check_rate_limit(user_id)
 
     # Personalization: how the user wants the agent to address them (if set).
+    # Anonymous visitors have no profile, and looking one up by "" would scan
+    # for a user that cannot exist.
     user_name = ""
-    try:
-        factory = get_session_factory()
-        async with factory() as db:
-            db_user = await db.get(User, user_id)
-            if db_user:
-                user_name = db_user.preferred_name or ""
-    except Exception as e:
-        logger.warning("Could not load preferred_name for %s: %s", user_id, e)
+    if user_id:
+        try:
+            factory = get_session_factory()
+            async with factory() as db:
+                db_user = await db.get(User, user_id)
+                if db_user:
+                    user_name = db_user.preferred_name or ""
+        except Exception as e:
+            logger.warning("Could not load preferred_name for %s: %s", user_id, e)
+
+    # Traces stay attributable without carrying an identity: a demo visitor is
+    # a truncated random id, which groups one visitor's turns together and says
+    # nothing about who they are.
+    trace_actor = user_id or f"anon:{principal.anon_id[:8]}"
 
     async def event_stream() -> AsyncGenerator[str, None]:
         session_id = request.session_id or str(uuid.uuid4())
         start_time = time.monotonic()
         settings = get_settings()
         event_queue: asyncio.Queue = asyncio.Queue()
+
+        async def spend_free_query() -> dict | None:
+            """
+            Deduct one demo query at the moment we commit to serving.
+
+            Returns an SSE payload if the visitor raced past the pre-flight
+            check in another tab, otherwise None. A cache hit spends one too:
+            the per-visitor allowance is a product decision about when to ask
+            for a signup, and the visitor got an answer either way. What the
+            run *costs* is the budget guard's business, and a replay costs
+            nothing, so it never touches the credit pool.
+            """
+            if not principal.is_anonymous:
+                return None
+            try:
+                await consume_quota(http_request, principal.anon_id)
+                return None
+            except HTTPException as e:
+                detail = e.detail if isinstance(e.detail, dict) else {}
+                return {
+                    "code": "demo_quota_exhausted",
+                    "limit": detail.get("limit", get_settings().anon_free_queries),
+                    "message": detail.get(
+                        "message", "You've used your free queries. Sign in to keep going."
+                    ),
+                }
 
         history = [{"query": h.query, "answer": h.answer} for h in request.history]
         stored_documents = [
@@ -177,6 +247,10 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                     })
 
             if cached:
+                blocked = await spend_free_query()
+                if blocked:
+                    yield _sse("limit", blocked)
+                    return
                 logger.info(
                     "Answer cache HIT (%s) for: %s", cache_kind, request.query[:80]
                 )
@@ -186,7 +260,7 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 # before any yield: the SSE generator can be finalized from a
                 # different task, and a span must not straddle that.
                 with tracing.request_scope(
-                    user_id=user_id, session_id=session_id, tags=["research", "cached"]
+                    user_id=trace_actor, session_id=session_id, tags=["research", "cached"]
                 ):
                     with tracing.span(
                         "research",
@@ -235,6 +309,51 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 })
                 return
 
+        # --- Spend ceiling ------------------------------------------------
+        # Only reached on a cache miss, i.e. only when this turn is about to
+        # cost real search credits. A breach degrades to cache-only rather than
+        # returning 503: the visitor still gets every answer already in the
+        # cache, and an honest "paused" is a far better failure than a demo
+        # that falls over during the one spike that matters.
+        budget_status = await budget.check_budget(anonymous=principal.is_anonymous)
+        if not budget_status.allowed:
+            logger.warning(
+                "Budget ceiling reached (%s); refusing live run for %s",
+                budget_status.reason, principal.label,
+            )
+            yield _sse("paused", {
+                "code": budget_status.reason,
+                "message": budget_status.message,
+                # True when signing in would actually help — a demo sub-pool
+                # breach, not a global one. Saying "sign in to continue" when
+                # the whole month is spent would be a lie.
+                "signin_helps": budget_status.reason == "anon_daily",
+            })
+            yield _sse("done", {
+                "session_id": session_id,
+                "total_sources": 0,
+                "iterations": 0,
+                "confidence": 0.0,
+                "invalid_citations": 0,
+                "model": settings.groq_synth_model,
+                "latency_ms": int((time.monotonic() - start_time) * 1000),
+                "cached": False,
+                "cache_kind": "",
+                "paused": True,
+                "usage": empty_usage(),
+            })
+            return
+
+        blocked = await spend_free_query()
+        if blocked:
+            yield _sse("limit", blocked)
+            return
+
+        # Book the worst case before the run starts. Reserving what it *might*
+        # cost rather than what it did is what stops a burst of concurrent
+        # requests from all reading the same 60s-old total and all being let in.
+        await budget.reserve(anonymous=principal.is_anonymous)
+
         async def queue_callback(event_type: str, data: dict):
             await event_queue.put((event_type, data))
 
@@ -274,7 +393,7 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 # The whole graph runs within this one task, so every stage span
                 # nests under this root automatically.
                 with tracing.request_scope(
-                    user_id=user_id, session_id=session_id, tags=["research"]
+                    user_id=trace_actor, session_id=session_id, tags=["research"]
                 ):
                     with tracing.span(
                         "research",
@@ -376,8 +495,14 @@ async def research(request: ResearchRequest, user: dict = Depends(get_current_us
                 if not agent_task.done():
                     agent_task.cancel()
 
-    return StreamingResponse(
+    response = StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+    # A visitor who lands straight on /api/research without calling
+    # /api/demo/status first still needs their id pinned, or every query would
+    # mint a fresh identity and the allowance would never count down.
+    if principal.is_anonymous and not read_anon_id(http_request):
+        set_anon_cookie(response, principal.anon_id)
+    return response
