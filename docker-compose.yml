@@ -3,7 +3,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: research-postgres
-    restart: unless-stopped
+    restart: "no"
     environment:
       POSTGRES_USER: agent
       POSTGRES_PASSWORD: agent
@@ -22,7 +22,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: research-redis
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "6379:6379"
     volumes:
@@ -39,7 +39,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: research-backend
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "8000:8000"
     environment:
@@ -71,7 +71,11 @@ services:
     # remove this volume + command so the baked code and prod CMD are used.
     volumes:
       - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # --reload-dir app: the bind mount carries the local ./backend/venv (~4k
+    # files) into /app. With polling forced on (above), an unscoped reloader
+    # re-stats that whole tree every cycle for the life of the container --
+    # constant CPU wakeups and a hot laptop. Watch only the source we edit.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
   # --- Frontend (Next.js) ---
   frontend:
@@ -86,7 +90,7 @@ services:
         NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
         NEXT_PUBLIC_ENVIRONMENT: ${ENVIRONMENT:-development}
     container_name: research-frontend
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "3000:3000"
     depends_on:
