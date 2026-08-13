@@ -232,6 +232,11 @@ class SessionListItem(BaseModel):
 class SessionTurn(BaseModel):
     """A single turn (question + answer) within a stored research thread."""
     query: str
+    # The decomposition triage produced for this turn. Also present inside
+    # `trace`, but returned at the top level too: turns stored before the Trace
+    # tab existed have `trace == {}` and this is the only place their
+    # sub-queries survive.
+    sub_queries: list[str] = Field(default_factory=list)
     answer: str = ""
     sources: list[SearchResult] = Field(default_factory=list)
     citations: list = Field(default_factory=list)   # raw; may be dict or Citation

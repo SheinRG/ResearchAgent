@@ -139,6 +139,7 @@ async def get_session(session_id: str):
             turns.append(
                 SessionTurn(
                     query=row.query or "",
+                    sub_queries=row.sub_queries or [],
                     answer=row.answer or "",
                     sources=sources,
                     citations=row.citations or [],
