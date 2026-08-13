@@ -236,6 +236,12 @@ function ResearchContent() {
   const hasThread    = turns.length > 0 || Boolean(activeQuery);
   const headerTitle  = sessionTitle || turns[0]?.query || activeQuery || "Untitled session";
 
+  // The stored id for this thread, however we arrived: ?session= when restoring,
+  // or the id the first done event handed back on a live run. Derived from turns
+  // rather than sessionIdRef because a ref change doesn't re-render the header.
+  const activeSessionId =
+    sessionId || turns[turns.length - 1]?.doneData?.session_id || "";
+
   // For shared sessions, unauthenticated visitors are allowed to view.
   if (isLoading && !sessionId) return null;
 
@@ -271,7 +277,12 @@ function ResearchContent() {
     <main className={`research-page ${openDoc ? "viewer-open" : ""}`}>
       <div className="research-thread">
         {hasThread && (
-          <SessionHeader title={headerTitle} onRename={setSessionTitle} turns={turns} />
+          <SessionHeader
+            title={headerTitle}
+            onRename={setSessionTitle}
+            turns={turns}
+            sessionId={activeSessionId}
+          />
         )}
 
         {turns.map((turn) => (
