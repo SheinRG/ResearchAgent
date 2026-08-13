@@ -103,9 +103,12 @@ visitors hit it instead of the credit pool.
 Known limits, verified in code:
 - `ResearchQuery` has **no images column**, so a restored/shared session has an
   empty Images tab. Accept it — images aren't the differentiator.
-- `sub_queries` **is** stored but is not returned by `GET /api/sessions/{id}`.
-  Add it (~30 min) — for a demo pitched on "shows its work," dropping the query
-  decomposition is self-inflicted.
+- ~~`sub_queries` is stored but is not returned by `GET /api/sessions/{id}`.~~
+  **Overstated, and now done.** The decomposition was never actually lost: it is
+  also written inside `trace`, which *is* returned, and `TraceView` renders it.
+  The real gap was narrower — turns stored before the Trace tab existed have
+  `trace == {}`, and for those the column was the only surviving copy. It is now
+  returned at the top level of each turn as well.
 - `trace` **is** persisted and **is** returned. The actual differentiator
   survives the shared-session path intact.
 
@@ -140,19 +143,33 @@ grant" is a senior answer. "Every session is public if you know the URL" is not.
   and `services/anonymous.py` (per-visitor and per-IP allowances, both
   fail-closed). Tier 0 item 2 is subsumed by this. See §3.1 for the sizing and
   why 3 rather than 30.
+- **`LICENSE` (MIT)** — the repo was legally all-rights-reserved while the README
+  advertised MIT. Every OSS item was blocked behind this.
+- **The delete button deletes.** `SessionHeader.js` toasted "Session deleted" and
+  navigated away without ever calling the API, so the thread came back on the
+  next sidebar fetch. It now calls `DELETE /api/sessions/{id}`, waits for the
+  server, refreshes the sidebar, and only then navigates. It is hidden unless the
+  visitor is signed in and the thread has a stored id — the endpoint requires
+  auth plus ownership, so offering it otherwise only ever produced a 404.
+- **Upload size guard reads in chunks.** `await file.read()` ran *before* the
+  size check, so a 500MB POST was fully resident before it could be rejected.
+  Peak memory per upload is now bounded at 5MB + 64KB. Covered by
+  `tests/test_upload_limits.py`, which asserts on bytes read, not just the 413.
+- **`sub_queries` returned from `GET /api/sessions/{id}`** — see the correction
+  in §3.1; the gap was smaller than this document claimed.
 
-## 5. Tier 0 — before anything goes public (~9 hrs remaining)
+## 5. Tier 0 — before anything goes public (~1 hr remaining)
 
 None of this makes the project better. All of it stops the project from being
 broken, illegal, or exploitable.
 
 | # | Item | Hrs | Goals | Why |
 |---|---|---|---|---|
-| 1 | Add a real `LICENSE` file (MIT) | 0.25 | ALL | `README.md` claims MIT but **no LICENSE file exists**, so the repo is legally all-rights-reserved. Nobody can use or contribute. Every OSS item below is void until this exists. |
+| 1 | ~~Add a real `LICENSE` file (MIT)~~ — **done**, see §4 | — | — | The repo was legally all-rights-reserved while the README advertised MIT. |
 | 2 | ~~Global daily spend ceiling~~ — **done**, see §4 | — | — | Built as `services/budget.py` when anonymous demo mode needed it. The design notes below still describe what shipped. |
-| 3 | Harden upload limits (see local security notes) | 1 | JOB | Memory-footprint hardening on a small instance. |
-| 4 | Fix the fake delete button (`SessionHeader.js`) | 0.5 | USERS | Shows "Session deleted", navigates away, never calls the API. A delete that lies is worse than no delete. |
-| 5 | Repo description, topics, social preview image | 1 | OSS | The description reads "A Perplexity AI clone" — that sentence costs stars on every link preview before anyone opens the README. |
+| 3 | ~~Harden upload limits~~ — **done**, see §4 | — | — | Memory-footprint hardening on a small instance. |
+| 4 | ~~Fix the fake delete button~~ — **done**, see §4 | — | — | A delete that lies is worse than no delete. |
+| 5 | Repo description, topics, social preview image | 1 | OSS | The description reads "A Perplexity AI clone" — that sentence costs stars on every link preview before anyone opens the README. **Only remaining Tier 0 item, and it is GitHub-side, not code.** |
 
 ### The spend ceiling must not be Redis-only
 
@@ -196,10 +213,10 @@ than "we rate-limit."*
 | ~~Anonymous demo mode (replay fixtures, zero cost)~~ — **done**, and live rather than replayed; see §3.1 and §4 | — | — |
 | README rewrite: GIF above the fold, live demo link in the first 3 lines, one blunt differentiation paragraph, evals pulled out of the war-story section into a "why this is production-grade" block near the top | 8 | ALL |
 | Explicit revocable share tokens for sessions (§3.2) | 5 | USERS, JOB |
-| Return `sub_queries` from `GET /api/sessions/{id}` | 0.5 | USERS |
+| ~~Return `sub_queries` from `GET /api/sessions/{id}`~~ — **done**, see §4 | — | — |
 | Retry + backoff on Serper/Tavily — both currently return `[]` silently on any failure | 1 | USERS |
 | Per-IP registration limit | 2 | USERS |
-| Tag `v0.1.0` (zero tags exist today) | 0.25 | OSS |
+| ~~Tag `v0.1.0`~~ — **done** | — | OSS |
 
 > Note on the per-IP limit: it is **not** needed to stop budget bypass — a
 > *global* ceiling is by construction not bypassable by creating accounts. The
