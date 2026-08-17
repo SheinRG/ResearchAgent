@@ -2,7 +2,7 @@
 
 > An autonomous research agent that decomposes a question, searches the web, reads and ranks sources, and streams back a comprehensive answer with verifiable `[1]`-style citations — a Perplexity-style experience built on an agentic LangGraph pipeline.
 
-[![CI](https://github.com/SheinRG/AI-ResearchAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/SheinRG/AI-ResearchAgent/actions/workflows/ci.yml)
+[![CI](https://github.com/SheinRG/ResearchAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/SheinRG/ResearchAgent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
@@ -156,7 +156,7 @@ All three have free tiers and none require a card.
 ### 3. Clone and configure
 
 ```bash
-git clone https://github.com/SheinRG/AI-ResearchAgent.git
+git clone https://github.com/SheinRG/ResearchAgent.git
 cd AI-ResearchAgent
 ```
 
