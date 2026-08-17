@@ -127,6 +127,24 @@ grant" is a senior answer. "Every session is public if you know the URL" is not.
 
 ## 4. Done
 
+- **Search retries + honest credit accounting.** Serper and Tavily returned
+  `[]` on the first timeout or 5xx, which the pipeline cannot tell apart from
+  "the web has nothing on this" — one blip produced a confident answer with no
+  sources and no visible error. Both now retry with exponential backoff under a
+  wall-clock deadline (`services/retry.py`, shared with the Groq client, which
+  had the only copy of this logic). The subtle half: credit counting moved from
+  `researcher.py` into the provider clients and now fires **per HTTP attempt**.
+  Counted per *call*, a flapping provider would have billed three lookups while
+  the guard counted one — a leak with no alarm on it. Image search is
+  deliberately not retried: it is decorative, and a retry spends a credit an
+  answer could have used.
+- **Per-IP registration limit** (Tier 1). `/register` was unbounded. Not a
+  budget-bypass fix — the ceilings in `services/budget.py` are global and cannot
+  be bypassed by minting accounts — but a signup loop could burn the shared
+  daily allowance and drop every real visitor into degraded mode. 5/IP/rolling
+  day, counting *attempts* rather than successes (a script hammering existing
+  addresses never creates a row), checked before any DB work or bcrypt hash, and
+  fails closed to a process-local counter when Redis is down.
 - **`bc78d0a`** — Redis reconnect backoff. `_redis_available` was a one-way
   latch: the first failed connect disabled the cache for the life of the
   process, silently taking the answer cache, the Redis rate-limit path and the
@@ -205,7 +223,7 @@ than "we rate-limit."*
 
 ## 6. Tiers 1–3
 
-### Tier 1 — weeks 2–4: make it visible and safe to share (~29 hrs)
+### Tier 1 — weeks 2–4: make it visible and safe to share (~19 hrs remaining)
 
 | Item | Hrs | Goals |
 |---|---|---|
@@ -214,8 +232,8 @@ than "we rate-limit."*
 | README rewrite: GIF above the fold, live demo link in the first 3 lines, one blunt differentiation paragraph, evals pulled out of the war-story section into a "why this is production-grade" block near the top | 8 | ALL |
 | Explicit revocable share tokens for sessions (§3.2) | 5 | USERS, JOB |
 | ~~Return `sub_queries` from `GET /api/sessions/{id}`~~ — **done**, see §4 | — | — |
-| Retry + backoff on Serper/Tavily — both currently return `[]` silently on any failure | 1 | USERS |
-| Per-IP registration limit | 2 | USERS |
+| ~~Retry + backoff on Serper/Tavily~~ — **done**, see §4 | — | — |
+| ~~Per-IP registration limit~~ — **done**, see §4 | — | — |
 | ~~Tag `v0.1.0`~~ — **done** | — | OSS |
 
 > Note on the per-IP limit: it is **not** needed to stop budget bypass — a

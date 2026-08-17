@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     # --- Serper (Search API) ---
     serper_api_key: str = ""
 
+    # --- Search retries (Serper + Tavily) ---
+    # Both providers used to return [] on any failure, which the pipeline cannot
+    # tell apart from "no results exist" — a blip produced a confident answer
+    # with no sources instead of a visible error.
+    #
+    # Deliberately shorter-tempered than the Groq retries above. Every attempt
+    # that reaches a search provider is billed by it, and the sub-queries run in
+    # parallel, so a provider outage multiplies both the credit burn and the
+    # latency by the number of sub-queries at once. The deadline is the real
+    # guard: at tavily_timeout=20s, three attempts would otherwise be a 60s wall
+    # on the slowest step in the product.
+    search_max_retries: int = 2
+    search_retry_base_delay: float = 0.5   # seconds, doubled each retry
+    search_retry_deadline: float = 25.0    # seconds; no further attempt starts after this
+
     # --- Tavily (search + read API) ---
     # When use_tavily_search is true AND a key is set, the researcher uses
     # Tavily's single search+content call instead of Serper search + Trafilatura
@@ -145,6 +160,21 @@ class Settings(BaseSettings):
 
     # --- Rate Limiting ---
     rate_limit_per_hour: int = 30  # research queries per user per hour
+
+    # New accounts per IP per rolling 24h. 0 disables the limit.
+    #
+    # Not a budget-bypass guard — the ceilings below are global, so minting
+    # accounts cannot get past them by construction. This exists for denial of
+    # service: one script registering in a loop burns the shared daily allowance
+    # and every legitimate visitor lands in degraded mode.
+    #
+    # Rolling day rather than the hourly window used for queries, because signup
+    # abuse is a script left running rather than a burst — an hourly cap of the
+    # same size would hand out 24x the accounts. Generous enough for an office,
+    # campus or carrier NAT where several real people share one address, and
+    # like every per-IP counter here it is best-effort: X-Forwarded-For is
+    # client-supplied. It raises the cost of the attack; it does not close it.
+    registrations_per_ip_per_day: int = 5
 
     # --- Anonymous demo mode ---
     # Logged-out visitors can run real research without registering, because a

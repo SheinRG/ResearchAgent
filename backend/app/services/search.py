@@ -11,6 +11,8 @@ import httpx
 
 from app.models.schemas import SearchResult
 from app.config import get_settings
+from app.services.retry import with_retries
+from app.services.usage import record_search
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,12 @@ async def search_web(
     """
     Search the web using the Serper.dev Google Search API.
 
+    Transient failures (timeouts, 429, 5xx) are retried with exponential
+    backoff. Still best-effort at the end of that: an exhausted retry budget
+    yields an empty list, because one dead sub-query should degrade a research
+    run rather than fail it. What changed is that it is no longer *one* blip
+    away — and every attempt is counted as billed.
+
     Args:
         query: The search query string.
         max_results: Maximum number of results to return.
@@ -54,15 +62,27 @@ async def search_web(
         "num": max_results,
     }
 
-    try:
-        client = _get_client()
-        response = await client.post(
+    async def _request() -> dict:
+        response = await _get_client().post(
             SERPER_ENDPOINT,
             headers=headers,
             json=payload,
         )
         response.raise_for_status()
-        data = response.json()
+        return response.json()
+
+    try:
+        data = await with_retries(
+            _request,
+            label=f"Serper search for '{query[:50]}'",
+            attempts=settings.search_max_retries + 1,
+            base_delay=settings.search_retry_base_delay,
+            deadline=settings.search_retry_deadline,
+            # Serper bills the lookup whether or not the response reaches us, so
+            # a retry is a second credit. Counting per attempt keeps the budget
+            # guard honest about what an outage actually costs.
+            on_attempt=lambda: record_search("basic"),
+        )
 
         raw_results = data.get("organic", [])
         results = []
@@ -114,6 +134,10 @@ async def search_images(query: str, max_results: int = 10) -> list[dict]:
 
     Best-effort and resilient: any timeout, HTTP error, or unexpected failure
     returns an empty list so an image lookup can never break a research run.
+
+    Deliberately *not* retried, unlike ``search_web``. Images are decorative —
+    they populate a tab the user may never open — and a retry spends another
+    billable lookup. Failing fast here leaves that credit for an answer.
 
     Args:
         query: The search query string.

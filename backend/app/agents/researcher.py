@@ -13,7 +13,6 @@ from app.services.scraper import scrape_urls
 from app.services.tavily import tavily_search
 from app.services.reranker import rerank_chunks
 from app.services.cache import cache_get, cache_get_many, cache_set
-from app.services.usage import record_search
 from app.utils.chunker import chunk_text
 from app.agents.state import ResearchState
 from app.config import get_settings
@@ -32,10 +31,13 @@ async def _search_single_query(sub_query: str, max_results: int) -> tuple[str, l
         logger.info("Cache hit for search: %s", sub_query[:50])
         return sub_query, cached
 
-    # Counted before the call, not after: a search that raises has still been
-    # billed by the provider, and a guard that only counts successes would let
-    # a failing provider burn the whole month's credits uncounted.
-    record_search("basic")
+    # Credits are counted inside the provider client, once per HTTP attempt —
+    # same shape as services.llm recording its own token usage. It used to be
+    # counted here, once per call, which was right until the client learned to
+    # retry: a flapping provider would have billed three lookups while this line
+    # counted one. The invariant is unchanged, only its home is — a search that
+    # raises has still been billed, so attempts are what get counted, not
+    # successes.
     results_objs = await search_web(sub_query, max_results=max_results)
     results = [r.model_dump() for r in results_objs]
     await cache_set("search", sub_query, results)
@@ -71,7 +73,7 @@ async def _tavily_single_query(sub_query: str, settings) -> list[dict]:
         logger.info("Cache hit for tavily: %s", sub_query[:50])
         return cached
 
-    record_search(settings.tavily_search_depth)
+    # Counted per attempt inside the client — see _search_single_query above.
     results = await tavily_search(
         sub_query,
         max_results=settings.search_results_per_query,

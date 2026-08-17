@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import get_settings
+from app.services.retry import with_retries
+from app.services.usage import record_search
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +53,10 @@ async def tavily_search(
     """
     Search the web with Tavily and return results that already include content.
 
-    Best-effort: any timeout/HTTP/parse failure returns an empty list so a single
-    bad sub-query never breaks the research run.
+    Transient failures (timeouts, 429, 5xx) are retried with exponential backoff
+    under a wall-clock deadline. Best-effort after that: an exhausted budget
+    returns an empty list so a single bad sub-query never breaks the research
+    run — but it now takes a sustained outage rather than one dropped packet.
 
     Returns:
         List of dicts shaped as
@@ -79,11 +83,23 @@ async def tavily_search(
         "include_images": False,
     }
 
-    try:
-        client = _get_client()
-        response = await client.post(TAVILY_ENDPOINT, headers=headers, json=payload)
+    async def _request() -> dict:
+        response = await _get_client().post(TAVILY_ENDPOINT, headers=headers, json=payload)
         response.raise_for_status()
-        data = response.json()
+        return response.json()
+
+    try:
+        data = await with_retries(
+            _request,
+            label=f"Tavily search for '{query[:50]}'",
+            attempts=settings.search_max_retries + 1,
+            base_delay=settings.search_retry_base_delay,
+            deadline=settings.search_retry_deadline,
+            # Tavily bills per search, and a timeout does not mean the search
+            # did not happen on their side. Each attempt is counted at the
+            # configured depth so the guard sees an outage's real cost.
+            on_attempt=lambda: record_search(search_depth),
+        )
 
         results: list[dict] = []
         for r in data.get("results", []):

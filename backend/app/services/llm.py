@@ -21,6 +21,11 @@ from groq import AsyncGroq
 
 from app.config import get_settings
 from app.services import tracing
+# The retry predicate is shared with the search clients — see services.retry.
+# This module keeps its own retry *loop* because each attempt has to update the
+# surrounding Langfuse observation, which a generic helper has no business
+# knowing about.
+from app.services.retry import RETRYABLE_STATUS as _RETRYABLE_STATUS, is_retryable as _is_retryable
 
 # TokenUsage/UsageCallback live in services.usage — the accounting module owns
 # the accounting type. Re-exported here so callers can keep importing them from
@@ -30,10 +35,6 @@ from app.services.usage import TokenUsage, UsageCallback, record_usage
 __all__ = ["GroqClient", "TokenUsage", "UsageCallback", "get_llm_client"]
 
 logger = logging.getLogger(__name__)
-
-# HTTP statuses worth retrying — transient server/throttling errors only.
-# 4xx like 400/401/404 are permanent and must NOT be retried.
-_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 def stream_request_kwargs(
@@ -69,18 +70,6 @@ def stream_request_kwargs(
         "stream": True,
         "extra_body": {"stream_options": {"include_usage": True}},
     }
-
-
-def _is_retryable(exc: Exception) -> bool:
-    """Whether a Groq/httpx exception represents a transient, retryable failure."""
-    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError)):
-        return True
-    # Groq SDK errors expose .status_code; some wrap an httpx response instead.
-    status = getattr(exc, "status_code", None)
-    if status is None:
-        resp = getattr(exc, "response", None)
-        status = getattr(resp, "status_code", None)
-    return status in _RETRYABLE_STATUS
 
 
 class GroqClient:

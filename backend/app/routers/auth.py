@@ -31,7 +31,7 @@ from app.services.auth import (
     validate_and_rotate_refresh_token,
     revoke_refresh_token,
 )
-from app.services.anonymous import new_anon_id, read_anon_id
+from app.services.anonymous import client_ip, new_anon_id, read_anon_id
 from app.services.cache import get_redis
 
 logger = logging.getLogger(__name__)
@@ -130,12 +130,23 @@ async def get_principal(request: Request) -> Principal:
 
 _RATE_WINDOW_SECONDS = 3600
 
+# Registrations are counted over a rolling day rather than an hour: signup abuse
+# is a script left running, not a burst, and an hourly window of the same size
+# would let it mint 24x the accounts.
+_REGISTRATION_WINDOW_SECONDS = 86400
+
 # Process-local fallback counters used only when Redis is unavailable, so a
 # Redis outage bounds abuse per-instance instead of removing the limit entirely
-# (each research query spends real money on Groq + Serper). Maps user_id ->
-# (window_start_epoch, count). Not shared across instances — acceptable as a
-# degraded mode; the single Render instance behaves the same as with Redis.
-_local_buckets: dict[str, tuple[float, int]] = {}
+# (each research query spends real money on Groq + Serper). Maps key ->
+# (window_start_epoch, count, window_seconds). Not shared across instances —
+# acceptable as a degraded mode; the single Render instance behaves the same as
+# with Redis.
+#
+# The window rides along with each entry because two limits with different
+# windows now share this dict. Pruning against a single global window would
+# expire a day-long signup bucket after an hour, quietly resetting the count
+# that the limit depends on.
+_local_buckets: dict[str, tuple[float, int, int]] = {}
 
 
 def _rate_limit_exceeded(limit: int) -> HTTPException:
@@ -145,40 +156,47 @@ def _rate_limit_exceeded(limit: int) -> HTTPException:
     )
 
 
-def _check_local_rate_limit(user_id: str, limit: int) -> None:
-    """Fixed-window limiter in process memory (Redis-down fallback)."""
+def _registration_limit_exceeded() -> HTTPException:
+    """
+    Deliberately vague, matching the 409 on a duplicate email above: neither
+    response should tell a script anything about which addresses exist.
+    """
+    return HTTPException(
+        status_code=429,
+        detail="Too many accounts created from this network. Please try again later.",
+    )
+
+
+def _hit_local_window(key: str, window: int) -> int:
+    """Bump one fixed-window counter in process memory (the Redis-down path)."""
     now = time.time()
 
     # Opportunistically prune expired buckets so memory can't grow unbounded.
     if len(_local_buckets) > 10_000:
-        for uid, (start, _) in list(_local_buckets.items()):
-            if now - start >= _RATE_WINDOW_SECONDS:
-                _local_buckets.pop(uid, None)
+        for k, (start, _, entry_window) in list(_local_buckets.items()):
+            if now - start >= entry_window:
+                _local_buckets.pop(k, None)
 
-    window_start, count = _local_buckets.get(user_id, (now, 0))
-    if now - window_start >= _RATE_WINDOW_SECONDS:
+    window_start, count, _ = _local_buckets.get(key, (now, 0, window))
+    if now - window_start >= window:
         window_start, count = now, 0  # window rolled over
 
     count += 1
-    _local_buckets[user_id] = (window_start, count)
-    if count > limit:
-        raise _rate_limit_exceeded(limit)
+    _local_buckets[key] = (window_start, count, window)
+    return count
 
 
-async def check_rate_limit(user_id: str) -> None:
+async def _hit_window(key: str, window: int) -> int:
     """
-    Fixed-window per-user rate limit. Atomic in Redis (INCR-then-check, so
-    concurrent requests can't slip past the cap), with a process-local fallback
-    when Redis is unavailable so the limit fails closed instead of wide open.
-    """
-    settings = get_settings()
-    limit = settings.rate_limit_per_hour
-    key = f"ratelimit:{user_id}"
+    Bump one fixed-window counter and return its new value.
 
+    Atomic in Redis (INCR-then-read, so concurrent requests can't both see "one
+    left"), with a process-local fallback when Redis is unavailable so callers
+    fail closed instead of wide open.
+    """
     redis = await get_redis()
     if redis is None:
-        _check_local_rate_limit(user_id, limit)
-        return
+        return _hit_local_window(key, window)
 
     try:
         # INCR first, then check the returned value — this is atomic, unlike a
@@ -186,22 +204,47 @@ async def check_rate_limit(user_id: str) -> None:
         # first hit of the window (nx) so abuse can't keep pushing it forward.
         pipe = redis.pipeline()
         pipe.incr(key)
-        pipe.expire(key, _RATE_WINDOW_SECONDS, nx=True)
+        pipe.expire(key, window, nx=True)
         results = await pipe.execute()
-        count = int(results[0])
-        if count > limit:
-            raise _rate_limit_exceeded(limit)
-    except HTTPException:
-        raise
+        return int(results[0])
     except Exception as e:
         # Redis errored mid-flight — degrade to the local limiter rather than
         # letting the request through uncounted.
-        logger.warning("Rate limit (redis) failed, using local fallback: %s", e)
-        _check_local_rate_limit(user_id, limit)
+        logger.warning("Window counter (redis) failed, using local fallback: %s", e)
+        return _hit_local_window(key, window)
+
+
+async def check_rate_limit(user_id: str) -> None:
+    """Fixed-window per-user limit on research queries."""
+    limit = get_settings().rate_limit_per_hour
+    if await _hit_window(f"ratelimit:{user_id}", _RATE_WINDOW_SECONDS) > limit:
+        raise _rate_limit_exceeded(limit)
+
+
+async def check_registration_limit(ip: str) -> None:
+    """
+    Fixed-window per-IP limit on new accounts.
+
+    Counts *attempts*, not successes: a script hammering /register with
+    addresses that already exist is the behaviour being limited, and it never
+    creates a row to count. Checked before any database work, so a blocked
+    attempt costs a Redis INCR rather than a query and a bcrypt hash.
+    """
+    limit = get_settings().registrations_per_ip_per_day
+    if limit <= 0:  # explicitly disabled
+        return
+    if await _hit_window(f"signup:ip:{ip}", _REGISTRATION_WINDOW_SECONDS) > limit:
+        logger.warning("Registration limit hit for ip=%s (limit %d/day)", ip, limit)
+        raise _registration_limit_exceeded()
 
 
 @router.post("/register")
-async def register(request: RegisterRequest, response: Response):
+async def register(request: RegisterRequest, response: Response, http_request: Request):
+    # `request` is the body model here, so the ASGI request comes in under its
+    # own name. Limit first: the point is to stop the attempt before it costs a
+    # database round-trip and a bcrypt hash.
+    await check_registration_limit(client_ip(http_request))
+
     factory = get_session_factory()
     async with factory() as db:
         result = await db.execute(select(User).where(User.email == request.email))
