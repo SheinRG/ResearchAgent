@@ -84,6 +84,30 @@ class TestChunkText:
         for chunk in chunks:
             assert len(chunk.strip()) > 30
 
+    def test_overlap_is_not_applied_twice_on_nested_splits(self):
+        """An oversized paragraph must not come back with its join text doubled.
+
+        The overlap used to be stitched on at every level of the recursion, so a
+        paragraph long enough to need a nested split had the previous chunk's
+        tail prepended once by the inner call and again by the outer one. The
+        duplicated run of words then went to the re-ranker and into the cited
+        context as if the source had said it twice.
+        """
+        overlap = 40
+        # Every token is distinct, so a repeated run means duplication rather
+        # than a coincidence of the sample text.
+        short_para = " ".join(f"s{i:03d}" for i in range(30))
+        long_para = " ".join(f"w{i:03d}" for i in range(120))
+        text = short_para + "\n\n" + long_para
+
+        chunks = chunk_text(text, chunk_size=200, chunk_overlap=overlap)
+
+        for chunk in chunks:
+            head = chunk[:overlap]
+            assert chunk.count(head) == 1, (
+                f"overlap {head!r} appears twice in chunk: {chunk!r}"
+            )
+
     def test_paragraph_boundary_preferred(self):
         """Text separated by double newlines should split at those boundaries."""
         para_a = "Alpha " * 40  # 240 chars
