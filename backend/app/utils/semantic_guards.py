@@ -16,7 +16,8 @@ these checks, all of which are cheap string work:
     polarity   negations and superlatives flip the meaning while leaving the
                topic untouched.
     order      "is X better than Y" and "is Y better than X" are near-identical
-               vectors asking opposite questions.
+               vectors asking opposite questions. Both the "X vs Y" and the
+               "X <comparative> than Y" phrasings are recognised.
     overlap    a floor on shared meaningful words, as a blunt backstop against
                two unrelated questions that happen to score highly.
 
@@ -60,6 +61,24 @@ _STOPWORDS = frozenset({
 
 _WORD = re.compile(r"[a-z0-9']+")
 
+# Comparatives that need two sides: "is X faster than Y". Swapping the sides
+# barely moves the vector but inverts the answer, exactly like "X vs Y", so the
+# order has to be checked the same way. Kept as an explicit list rather than an
+# "-er" suffix rule, which would read "other than" as a comparison.
+_COMPARATIVES = frozenset({
+    "better", "worse", "faster", "slower", "cheaper", "pricier", "safer",
+    "bigger", "smaller", "larger", "stronger", "weaker", "easier", "harder",
+    "simpler", "lighter", "heavier", "newer", "older", "quicker", "cleaner",
+    "more", "less", "fewer",
+})
+
+# Degree modifiers sit between a comparative and the thing being compared
+# ("much faster than"), so they are skipped when walking out to the two sides.
+_MODIFIERS = frozenset({
+    "much", "far", "way", "lot", "bit", "even", "still", "really", "quite",
+    "slightly", "significantly", "considerably", "noticeably",
+})
+
 
 def numbers_in(text: str) -> set[str]:
     """Every number in the text, normalized so 3.10 and 3.1 stay distinct."""
@@ -97,16 +116,58 @@ def token_overlap(a: str, b: str) -> float:
     return len(words_a & words_b) / len(words_a | words_b)
 
 
+def _side_word(words: list[str], index: int, step: int) -> Optional[str]:
+    """
+    The nearest meaningful word from ``index``, walking in direction ``step``.
+
+    Stopwords and degree modifiers are skipped so that "is the postgres much
+    faster than a mongodb" compares postgres against mongodb rather than "the"
+    against "a".
+    """
+    i = index + step
+    while 0 <= i < len(words):
+        word = words[i]
+        if word not in _STOPWORDS and word not in _MODIFIERS:
+            return word
+        i += step
+    return None
+
+
+def _comparative_before(words: list[str], than_index: int) -> Optional[int]:
+    """
+    Index of the comparative that makes a "than" a comparison, if there is one.
+
+    Looks back a short window so that both "better than" and "more secure than"
+    are caught, while "other than" and "rather than" are not.
+    """
+    for i in range(max(0, than_index - 3), than_index):
+        if words[i] in _COMPARATIVES:
+            return i
+    return None
+
+
 def _comparison_order(text: str) -> Optional[tuple[str, str]]:
     """
-    The two sides of an 'X vs Y' comparison, in the order they were asked.
+    The two sides of a comparison, in the order they were asked.
 
-    Returns None when the question is not a comparison.
+    Recognises "X vs Y" and "X <comparative> than Y". Returns None when the
+    question is not a comparison.
     """
     words = words_in(text)
     for i, word in enumerate(words):
-        if word in ("vs", "versus") and 0 < i < len(words) - 1:
-            return words[i - 1], words[i + 1]
+        if word in ("vs", "versus"):
+            left, right = _side_word(words, i, -1), _side_word(words, i, 1)
+            if left and right:
+                return left, right
+            continue
+
+        if word == "than":
+            marker = _comparative_before(words, i)
+            if marker is None:
+                continue
+            left, right = _side_word(words, marker, -1), _side_word(words, i, 1)
+            if left and right:
+                return left, right
     return None
 
 

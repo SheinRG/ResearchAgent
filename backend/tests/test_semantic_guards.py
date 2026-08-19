@@ -131,6 +131,38 @@ class TestComparisonOrder:
             "postgres vs mongodb for analytics",
         )
 
+    def test_reversed_comparative_is_rejected(self):
+        """The phrasing this class is named after, not just the "vs" shorthand.
+
+        Both questions carry the same numbers, the same polarity word, and
+        every content word in common, so this pair clears every other guard.
+        The order check is the only thing between it and a cached answer that
+        argues the opposite case.
+        """
+        assert rejects(
+            "is postgres better than mongodb for analytics workloads",
+            "is mongodb better than postgres for analytics workloads",
+        )
+
+    def test_reversed_multi_word_comparative_is_rejected(self):
+        assert rejects(
+            "is redis much more durable than memcached",
+            "is memcached much more durable than redis",
+        )
+
+    def test_same_comparative_order_is_accepted(self):
+        assert accepts(
+            "is postgres better than mongodb for analytics workloads",
+            "is postgres better than mongodb for analytics",
+        )
+
+    def test_than_without_a_comparative_is_not_a_comparison(self):
+        """"other than" and "rather than" are not X-versus-Y questions."""
+        assert accepts(
+            "vector stores other than pgvector for a rag app",
+            "vector stores other than pgvector for a rag application",
+        )
+
 
 class TestTokenOverlap:
     """A blunt backstop for two unrelated questions that happen to score high."""
