@@ -12,6 +12,8 @@
  * SSR (these functions must only be called in browser event handlers).
  */
 
+import { safeUrl } from "./safeUrl";
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -45,6 +47,31 @@ function downloadBlob(blob, filename) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Render one source as a Markdown list item.
+ *
+ * Source URLs come from web search, so they are attacker-influenced in exactly
+ * the way `safeUrl` exists for: an exported .md is read in editors and viewers
+ * that will happily turn `[label](javascript:...)` into a working link. A URL
+ * that is not plain http(s) is dropped and the source is written as bare text
+ * rather than as a link.
+ *
+ * The label is escaped too — an unescaped `]` in a page title closes the link
+ * early and spills the raw URL into the document body.
+ *
+ * @param {{title?: string, domain?: string, url?: string}} source
+ * @param {number} index  Zero-based position in the source list
+ * @returns {string}
+ */
+function markdownSourceLine(source, index) {
+  const label = (source.title || source.domain || source.url || `Source ${index + 1}`)
+    .replace(/[[\]]/g, "\\$&")
+    .replace(/\s+/g, " ")
+    .trim();
+  const url = safeUrl(source.url, "");
+  return url ? `${index + 1}. [${label}](${url})` : `${index + 1}. ${label}`;
 }
 
 /**
@@ -194,10 +221,10 @@ export function exportMarkdown(session) {
     if (turn.sources && turn.sources.length > 0) {
       lines.push("### Sources");
       turn.sources.forEach((s, idx) => {
-        const label = s.title || s.domain || s.url || `Source ${idx + 1}`;
-        const url = s.url || "";
-        lines.push(`${idx + 1}. [${label}](${url})`);
-        if (s.snippet) lines.push(`   > ${s.snippet}`);
+        lines.push(markdownSourceLine(s, idx));
+        // A snippet with a newline in it would end the blockquote and leave the
+        // tail of the quote sitting in the document as body text.
+        if (s.snippet) lines.push(`   > ${s.snippet.replace(/\s+/g, " ").trim()}`);
       });
       lines.push("");
     }
