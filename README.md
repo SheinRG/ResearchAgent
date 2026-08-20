@@ -1,6 +1,6 @@
 # 🔬 goon.ai — AI Research Agent
 
-> An autonomous research agent that decomposes a question, searches the web, reads and ranks sources, and streams back a comprehensive answer with verifiable `[1]`-style citations — a Perplexity-style experience built on an agentic LangGraph pipeline.
+> An autonomous research agent that decomposes a question, searches the web, reads and ranks sources, and streams back a comprehensive answer with verifiable `[1]`-style citations — a Perplexity-style experience built on  agentic LangGraph pipeline.
 
 [![CI](https://github.com/SheinRG/ResearchAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/SheinRG/ResearchAgent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
