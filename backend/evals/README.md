@@ -20,6 +20,7 @@ did what it said it did needs only data the pipeline already produces.
 | `run_eval.py` | The runner. Executes the set, aggregates, compares to the baseline. |
 | `baseline.json` | Last accepted numbers. Regressions are measured against this. |
 | `capture.py` | Side errand: records citation-judge candidates while a run happens. |
+| `label.py` | Hand-labels those candidates into the gold set. |
 
 The split between the checklist and the runner is the important one: the
 scorers are tested on every pull request (`tests/test_scorers.py`,
@@ -83,6 +84,47 @@ Appending is idempotent by `pair_id` and the swap choice is seeded per
 sentence, so re-running the same queries reproduces the dataset rather than
 duplicating or perturbing it. The in-domain set is meant to accumulate across
 many runs.
+
+## Building the gold set
+
+`label.py` turns captured candidates into hand-labelled ground truth. The gold
+set is the only artifact licensed to produce a quotable number — everything
+else (the teacher's labels, the token-overlap baseline, the trained judge) is
+measured *against* it — so three rules protect it.
+
+```bash
+python -m evals.label --pairs evals/data/pairs.jsonl   # label; resumable, quit any time
+python -m evals.label --stats                          # progress, balance, breakdown
+python -m evals.label --recheck 40                     # self-agreement pass
+```
+
+**The labeller is blind.** You see the sentence and the evidence — exactly what
+the judge sees. You do not see whether capture called the pair `cited` or
+`swapped`, because that is a hint about the answer and would anchor you toward
+it. You also do not see the query, source title, or domain: labelling with
+information the model cannot access produces a standard no model could meet,
+which then reads as model failure rather than as a broken measurement.
+
+**Presentation is shuffled**, seeded so a resumed session keeps the same order.
+Capture emits a sentence's cited and swapped pairs adjacently, and labelling
+them back to back means judging the second relative to the first.
+
+**Your own consistency is measured.** `--recheck N` re-presents pairs you have
+already labelled, blind, and reports how often you agree with yourself. That
+number is the ceiling: a judge scoring above your self-agreement is fitting
+label noise, not learning the task. Quote it next to any model score — a result
+without it is a measurement with no error bar.
+
+`unclear` is a real answer, not a cop-out. Genuinely ambiguous evidence should
+be excluded from scoring rather than forced into a binary that is then treated
+as truth. It is reported separately, so a high unclear rate shows up as a data
+problem instead of hiding as label noise.
+
+`gold.jsonl` holds only pair ids and labels — no sentences, no evidence, no
+scraped text — so it is committable even though the candidates it refers to are
+not. The `--stats` breakdown by capture type is the check on the data plan: if
+swapped pairs come back mostly *supported*, the free negatives are not
+negatives and the plan needs revisiting.
 
 ## What it measures
 
