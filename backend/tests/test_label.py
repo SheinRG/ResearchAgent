@@ -111,10 +111,10 @@ def test_render_hides_query_source_and_url():
     assert candidate["source_url"] not in screen
 
 
-def test_session_never_displays_the_pair_type():
+def test_session_never_displays_the_pair_type(tmp_path):
     scripted = _Scripted("s", "u", "k", "q")
     lab.run_session(
-        _candidates(6), lab.Path("unused"),
+        _candidates(6), tmp_path / "gold.jsonl",
         prompt=scripted.prompt, write=scripted.write,
     )
     assert "swapped" not in scripted.shown
