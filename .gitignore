@@ -31,6 +31,12 @@ dist/
 # are uploaded as a CI artifact instead of versioned.
 backend/evals/results/
 
+# Captured citation-judge candidates. Held out deliberately: the records embed
+# full extracted page text from third-party sites, which is not ours to
+# redistribute. The curated, licence-checked dataset gets published separately;
+# this is the raw working file.
+backend/evals/data/
+
 # Scratch files from local smoke-testing (may contain auth tokens).
 tok.tmp
 *.tmp

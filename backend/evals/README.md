@@ -19,6 +19,7 @@ did what it said it did needs only data the pipeline already produces.
 | `scorers.py` | The checklist. Pure functions — no network, no model, no clock. |
 | `run_eval.py` | The runner. Executes the set, aggregates, compares to the baseline. |
 | `baseline.json` | Last accepted numbers. Regressions are measured against this. |
+| `capture.py` | Side errand: records citation-judge candidates while a run happens. |
 
 The split between the checklist and the runner is the important one: the
 scorers are tested on every pull request (`tests/test_scorers.py`,
@@ -34,6 +35,7 @@ python -m evals.run_eval --validate          # parse the query set, no API calls
 python -m evals.run_eval                     # full run (needs real API keys)
 python -m evals.run_eval --only prose-rag    # one or a few queries
 python -m evals.run_eval --update-baseline   # accept these numbers as the new bar
+python -m evals.run_eval --capture evals/data/pairs.jsonl   # also record judge candidates
 ```
 
 Needs `GROQ_API_KEY` and `TAVILY_API_KEY` (plus `SERPER_API_KEY` for images and
@@ -44,6 +46,43 @@ In CI it runs **weekly** (Mondays 07:00 UTC) via `.github/workflows/eval.yml`,
 plus a **Run workflow** button for on-demand runs. Not on pull requests: GitHub
 withholds secrets from fork PRs, so a per-PR eval would fail for anyone outside
 the repo — and it costs real Tavily credits.
+
+## Capturing citation-judge candidates
+
+`--capture` writes a JSONL record for every (answer sentence, cited source)
+pair the run produced. It exists because **the evidence behind a citation is
+never persisted**: the database keeps a search snippet, the trace keeps a
+180-char preview, and the full chunk text the model actually read lives only in
+graph state while the run is in flight. A run is the only chance to record it.
+
+Each record pairs one sentence with the exact text that sat behind its `[n]`
+marker in the synthesis prompt — recovered through the same
+`citations.select_evidence()` the synthesizer uses, not a re-implementation of
+its rules, so the two cannot drift.
+
+Two kinds of record come out, and **neither is labelled**:
+
+| `pair_type` | What it is |
+| --- | --- |
+| `cited` | The sentence and the source it actually cited. |
+| `swapped` | The same sentence against a *different* source from the same run. |
+
+`label` is always `null`. A cited pair is not automatically supported — models
+citing things their source does not say is the entire problem being measured —
+and a swapped pair is not automatically unsupported, because another source
+from the same run often supports the sentence too. Labelling either
+automatically would assume the answer to the question the judge exists to ask.
+
+Swapped pairs are there because a set of only-cited pairs is overwhelmingly
+supported, and a judge measured on those alone has no measurable precision.
+They cost nothing — no extra search credits, no extra tokens — and they are
+exactly the case a lexical overlap check gets wrong: same run, same topic,
+shared vocabulary, different evidence.
+
+Appending is idempotent by `pair_id` and the swap choice is seeded per
+sentence, so re-running the same queries reproduces the dataset rather than
+duplicating or perturbing it. The in-domain set is meant to accumulate across
+many runs.
 
 ## What it measures
 

@@ -6,6 +6,7 @@ Usage:
     python -m evals.run_eval --validate      # parse the query set only, no API calls
     python -m evals.run_eval --only prose-rag,table-vector-dbs
     python -m evals.run_eval --update-baseline
+    python -m evals.run_eval --capture evals/data/pairs.jsonl
 
 Exit code is 0 when every hard invariant held and no tracked metric regressed
 past its tolerance; 1 otherwise, so CI fails on a real regression.
@@ -38,11 +39,14 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 import yaml
 
 from evals.scorers import QueryScore, VALID_FORMATS, score_run
+
+if TYPE_CHECKING:  # the capture module pulls in app.*, which --validate must not need
+    from evals.capture import PairSink
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("evals")
@@ -150,7 +154,11 @@ def _initial_state(spec: dict) -> dict:
     }
 
 
-async def run_one(spec: dict, semaphore: asyncio.Semaphore) -> QueryScore:
+async def run_one(
+    spec: dict,
+    semaphore: asyncio.Semaphore,
+    sink: Optional[PairSink] = None,
+) -> QueryScore:
     """Run a single query through the graph and score whatever comes back."""
     # Imported here rather than at module scope so --validate works without the
     # full backend environment installed.
@@ -186,8 +194,37 @@ async def run_one(spec: dict, semaphore: asyncio.Semaphore) -> QueryScore:
             usage=usage_payload,
             error=error,
         )
+        if sink is not None and sink.enabled and not error:
+            sink.add(_capture_from(spec, accumulated))
+
         print(_line_for(score, spec), flush=True)
         return score
+
+
+def _capture_from(spec: dict, state: dict) -> list[dict]:
+    """
+    Extract judge candidates from one run's final state.
+
+    Guarded rather than trusted: capture is a side errand of the eval run, and a
+    malformed answer must not take down the scoring it rides along with.
+    """
+    from app.config import get_settings
+    from evals.capture import capture_pairs
+
+    try:
+        settings = get_settings()
+        return capture_pairs(
+            query_id=spec["id"],
+            query=spec["query"],
+            answer=state.get("draft_answer", ""),
+            ranked_chunks=state.get("ranked_chunks", []),
+            cited_sources=state.get("all_sources", []),
+            max_sources=settings.max_cited_sources,
+            max_chunks=settings.rerank_top_k,
+        )
+    except Exception as e:
+        logger.error("capture failed for %s: %s", spec.get("id"), e)
+        return []
 
 
 def _line_for(score: QueryScore, spec: dict) -> str:
@@ -201,9 +238,12 @@ def _line_for(score: QueryScore, spec: dict) -> str:
     )
 
 
-async def run_all(specs: list[dict]) -> list[QueryScore]:
+async def run_all(
+    specs: list[dict],
+    sink: Optional[PairSink] = None,
+) -> list[QueryScore]:
     semaphore = asyncio.Semaphore(CONCURRENCY)
-    return list(await asyncio.gather(*(run_one(s, semaphore) for s in specs)))
+    return list(await asyncio.gather(*(run_one(s, semaphore, sink) for s in specs)))
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +401,21 @@ async def main_async(args: argparse.Namespace) -> int:
         print(f"Query set OK — {len(specs)} queries, no duplicate ids, formats valid.")
         return 0
 
+    # Imported here, like the graph itself, so --validate stays dependency-free.
+    from evals.capture import PairSink
+
+    sink = PairSink(Path(args.capture) if args.capture else None)
+    if sink.enabled:
+        print(f"Capturing judge candidates to {sink.path}")
+
     print(f"Running {len(specs)} queries (concurrency {CONCURRENCY})...\n")
-    scores = await run_all(specs)
+    scores = await run_all(specs, sink)
+
+    if sink.enabled:
+        written = sink.flush()
+        skipped = len(sink.records) - written
+        note = f" ({skipped} already present)" if skipped else ""
+        print(f"Captured {written} new judge candidates{note} -> {sink.path}")
 
     specs_by_id = {s["id"]: s for s in specs}
     summary = summarize(scores, specs_by_id)
@@ -429,6 +482,14 @@ def main() -> int:
     parser.add_argument(
         "--update-baseline", action="store_true",
         help="Write this run's summary as the new baseline.",
+    )
+    parser.add_argument(
+        "--capture", default="",
+        help=(
+            "Also append citation-judge candidates to this JSONL file. "
+            "The full chunk text behind each [n] marker exists only while the "
+            "graph is running, so this is the one chance to record it."
+        ),
     )
     args = parser.parse_args()
     return asyncio.run(main_async(args))

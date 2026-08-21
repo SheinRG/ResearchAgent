@@ -17,6 +17,60 @@ CITATION_PATTERN = re.compile(r'\[(\d+)\]')
 MAX_CLAIM_LENGTH = 300
 
 
+def select_evidence(
+    ranked_chunks: list[dict],
+    max_sources: int = 8,
+    max_chunks: int = 12,
+) -> tuple[list[str], dict[str, list[str]]]:
+    """
+    Choose which chunks become the numbered evidence, and whose they are.
+
+    Split out of :func:`build_cited_context` so the exact text behind marker
+    ``[i]`` can be recovered without re-deriving these rules. The eval harness
+    needs that to pair an answer sentence with the evidence the model actually
+    read for the source it cited (see ``evals/capture.py``): the full chunk text
+    is never persisted anywhere, so it only exists while the graph is running.
+    A second implementation of this loop would drift from this one, and the
+    resulting dataset would be quietly mislabelled rather than obviously wrong.
+
+    Ordering is relevance order (the order chunks come back from re-ranking),
+    deduplicated by URL. The caps interact deliberately: once ``max_sources``
+    distinct sources are held, later chunks from *new* sources are skipped but
+    chunks from sources already in the list keep filling, up to ``max_chunks``
+    in total. That keeps the evidence concentrated on the best sources rather
+    than spreading it thin.
+
+    Args:
+        ranked_chunks: Re-ranked chunk dicts (text + source_url/title/domain).
+        max_sources: Maximum distinct sources to surface and number.
+        max_chunks: Maximum total chunks across all sources.
+
+    Returns:
+        Tuple of (source URLs in citation order, {url: [chunk text, ...]}).
+        The URL at index ``i`` is the source cited as ``[i + 1]``.
+    """
+    order: list[str] = []          # source URLs in citation order
+    chunks_by_url: dict[str, list[str]] = {}
+    total_chunks = 0
+
+    for chunk in ranked_chunks:
+        if total_chunks >= max_chunks:
+            break
+        url = chunk.get("source_url", "")
+        text = (chunk.get("text") or "").strip()
+        if not url or not text:
+            continue
+        if url not in chunks_by_url:
+            if len(order) >= max_sources:
+                continue  # source cap reached; skip new sources but keep filling existing
+            order.append(url)
+            chunks_by_url[url] = []
+        chunks_by_url[url].append(text)
+        total_chunks += 1
+
+    return order, chunks_by_url
+
+
 def build_cited_context(
     ranked_chunks: list[dict],
     search_results: list[dict],
@@ -46,25 +100,7 @@ def build_cited_context(
         Tuple of (cited_sources, context_string).
     """
     enrich = {r.get("url"): r for r in search_results if r.get("url")}
-
-    order: list[str] = []          # source URLs in citation order
-    chunks_by_url: dict[str, list[str]] = {}
-    total_chunks = 0
-
-    for chunk in ranked_chunks:
-        if total_chunks >= max_chunks:
-            break
-        url = chunk.get("source_url", "")
-        text = (chunk.get("text") or "").strip()
-        if not url or not text:
-            continue
-        if url not in chunks_by_url:
-            if len(order) >= max_sources:
-                continue  # source cap reached; skip new sources but keep filling existing
-            order.append(url)
-            chunks_by_url[url] = []
-        chunks_by_url[url].append(text)
-        total_chunks += 1
+    order, chunks_by_url = select_evidence(ranked_chunks, max_sources, max_chunks)
 
     cited_sources: list[dict] = []
     context_blocks: list[str] = []
