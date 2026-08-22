@@ -16,43 +16,50 @@ from app.agents.state import ResearchState, format_history
 
 logger = logging.getLogger(__name__)
 
-TRIAGE_SYSTEM = """You triage a user's message for an AI assistant named goon, and — when the message needs web research — you also plan that research, all in one JSON response.
+# Rewritten 2026-08-22 for openai/gpt-oss-20b, and cut from ~1,360 tokens to
+# roughly half that. Two reasons, and the second is the one that bites:
+#
+# 1. The old chat lane said chat was right for "widely-known facts that do not
+#    depend on recent or live information". gpt-oss-20b read that literally and
+#    sent "what is retrieval augmented generation", "what causes the northern
+#    lights" and "how do I reduce a docker image size" to chat -- 6 of the 20
+#    eval queries. That is the wrong lane for this product: an answer with no
+#    sources is the one thing goon is not for. Chat is now only greetings, small
+#    talk, questions about the assistant, and text the user supplied.
+#
+# 2. Groq's free tier allows 8,000 tokens per MINUTE. At 1,360 tokens of system
+#    prompt plus the message, that was about four triage calls a minute for the
+#    whole service -- and the eval harness, running four queries at once, spent
+#    most of its wall clock in 429 backoff rather than in the model. Every token
+#    cut here is throughput for every request.
+TRIAGE_SYSTEM = """You triage a message for a research assistant named goon and, when it needs the web, plan that research — one JSON response.
 
-STEP 1 — pick the mode:
-- "chat": normal conversation or a simple request the assistant can answer well from its own knowledge — greetings and small talk (hi, hello, thanks, how are you), questions about the assistant itself (who are you, what can you do, your name), opinions, jokes, encouragement, casual advice, writing / rephrasing / translating / summarizing text the user gives you, basic math, and widely-known facts that do not depend on recent or live information.
-- "research": anything that genuinely benefits from current information or web sources — news and recent events, live or real-world data (prices, stats, scores, weather), comparisons of specific real products/tools/services ("best X", "X vs Y"), specific people / companies / papers / places, how-tos where citations add real value, or any question where giving an outdated or made-up answer would matter.
+STEP 1 — mode:
+- "chat": ONLY greetings and small talk, questions about the assistant itself (who are you, what can you do), thanks, jokes, and operations on text the user has already given you (rephrase, translate, summarize, fix). Basic arithmetic counts too.
+- "research": EVERYTHING else, including questions you could answer from your own knowledge. Definitions, explanations, how-tos, history, comparisons, news, live data, people, companies, products. If the user is asking to LEARN something rather than chat, it is research — goon's whole point is that answers carry sources, so answering from memory is a failure, not a shortcut.
+When unsure, choose "research".
 
-Decide from the LATEST user message, using the prior conversation only for context. Lean toward "chat" for greetings and clearly casual or self-contained messages. When genuinely unsure, choose "research".
+STEP 2 — research only, plan it:
+- 2-4 focused sub-queries covering the question's full scope. Each specific, searchable, targeting a different aspect. Never repeat the question verbatim.
+- Anchor time-sensitive topics to {current_year} (e.g. "... {current_year}", "latest {current_year}").
+- Follow-ups: resolve "it", "they", "that" to the real named entities. Each sub-query goes to a search engine with NO memory of this conversation, so it must stand alone.
 
-STEP 2 — ONLY when mode is "research", plan the research:
-- Generate 2-4 focused sub-queries that together cover the full scope of the question. Each must be specific and searchable, target a different aspect, and prefer authoritative angles (official data, primary sources, expert analysis). Do NOT repeat the original question verbatim.
-- For time-sensitive topics, anchor recency to the current year ({current_year}) — e.g. "... {current_year}" or "latest {current_year}".
-- Follow-up handling: the question may rely on earlier conversation. Resolve references like "it", "they", "that", "the company" to the ACTUAL named entities. Every sub-query MUST be self-contained — it is sent to a web search engine with NO memory of the conversation, so spell out the real names, places, and topics instead of pronouns.
+Also pick the answer format by asking what is most useful to read:
+- "table" — MULTIPLE NAMED THINGS being compared or chosen between (tools, products, services, courses, libraries), each with attributes worth weighing. The right default for "best X", "top X", "X vs Y", "which X should I use". Each thing is a row; pick 3-5 columns that matter here.
+- "steps" — a process, setup, how-to, or ordered sequence the user follows.
+- "list" — discrete points, tips, reasons or takeaways that are NOT comparable named entities.
+- "prose" — one fact, definition, explanation, or open-ended discussion.
+Rule of thumb: if the answer looks like rows-and-columns with one named option per row, use "table". Use "list" when there is nothing to compare, "prose" for a single topic.
 
-  Also decide the single best format for the final answer by reasoning about what the user is trying to accomplish and what is most useful and scannable — NOT by keyword matching:
-  - "table" -> the answer is a set of MULTIPLE NAMED THINGS the user is choosing between or comparing — resources, tools, products, courses, services, sheets, websites, libraries, options, or entities — where each has attributes a chooser would weigh (price, topics, difficulty, ratings, pros/cons, specs, who it's best for). This is the RIGHT default for "best X", "top X", "recommended X", "which X should I use", and "X vs Y". Each thing becomes a row; pick 3-5 columns that matter for THIS query. Example: "best DSA sheets online" -> ["Sheet", "Topics covered", "No. of problems", "Cost", "Best for"].
-  - "steps" -> a process, how-to, setup, or ordered ranking the user follows in sequence.
-  - "list" -> discrete points, tips, reasons, takeaways, or facts that are NOT comparable named entities with shared columns. If the items are named options that could be compared, prefer "table".
-  - "prose" -> a single fact, definition, explanation, cause/effect, or open-ended discussion.
-  Decision rule: if you can imagine the answer as rows-and-columns where each row is one named option, choose "table". Fall back to "list" only when there is nothing to compare, and "prose" for a single-topic explanation.
+For "chat": sub_queries [] and answer_format {{"type": "prose", "reasoning": "", "columns": []}}.
 
-For "chat" mode, set "sub_queries" to [] and "answer_format" to {{"type": "prose", "reasoning": "", "columns": []}}.
+STEP 3 — time_sensitive (both modes): true if a correct answer changes over time (news, prices, scores, "latest", versions, rankings); false for definitions, history, established facts, stable how-tos. Unsure -> true. This only sets cache lifetime; it never changes what gets researched.
 
-STEP 3 — time_sensitive (set for BOTH modes):
-Decide whether the correct answer changes over time:
-- true: news, prices, scores, weather, "latest"/"current"/"today", release versions, rankings, anything where an answer written last week could now be wrong.
-- false: definitions, explanations, history, established facts, how-tos for stable tools, opinions — where an answer from last month is still correct today.
-When unsure, choose true. This only controls how long an answer may be reused from cache; it never changes what you research.
+STEP 4 — needs_web (only when documents are attached): false when the question is about or answerable from the attached document(s) — summarize, explain, extract, Q&A. That is the DEFAULT with a document present. true ONLY when answering needs information beyond the document. With no documents attached this is ignored.
 
-STEP 4 — needs_web (ONLY applies when documents are attached):
-If a document has been attached to this message, decide whether web augmentation is actually needed:
-- Set "needs_web": false when the user's question is about, or answerable from, the attached document(s) alone — e.g. "what is this about", "summarize this", "explain section 3", "what does it say about X", extract/Q&A about the document content. This is the DEFAULT when a document is present.
-- Set "needs_web": true ONLY when answering well genuinely requires external or current information BEYOND what the document contains — e.g. comparing the document to outside data, fetching latest news/prices, or facts clearly absent from the document.
-When NO documents are attached, omit "needs_web" or set it false — it is ignored downstream.
-
-Respond ONLY with valid JSON in this exact format:
+Respond ONLY with valid JSON:
 {{"mode": "chat|research", "sub_queries": ["sub-query 1", "sub-query 2"], "answer_format": {{"type": "table|list|steps|prose", "reasoning": "one short clause", "columns": ["Col A", "Col B"]}}, "time_sensitive": true|false, "needs_web": true|false}}
-Note: "columns" is REQUIRED only when type is "table" (2-6 short header strings tailored to the query); use [] otherwise. "needs_web" is only meaningful when documents are attached; it can be omitted or false otherwise."""
+"columns" is REQUIRED only for type "table" (2-6 short headers); use [] otherwise."""
 
 TRIAGE_PROMPT = """{conversation}{documents_note}Latest user message: {query}
 

@@ -56,10 +56,16 @@ QUERIES_PATH = EVALS_DIR / "queries.yaml"
 BASELINE_PATH = EVALS_DIR / "baseline.json"
 RESULTS_DIR = EVALS_DIR / "results"
 
-# How many queries run at once. Groq enforces per-minute request limits and the
-# pipeline makes 3+ calls per query, so this is deliberately modest — a run that
-# spends its time collecting 429s measures nothing.
-CONCURRENCY = 4
+# How many queries run at once. The comment below used to say "deliberately
+# modest"; measurement said otherwise. Groq's free tier caps at 8,000 tokens per
+# MINUTE, and one research query spends roughly 3-6k across triage, synthesis and
+# follow-ups. Four at once therefore sat in 429 backoff rather than in the model:
+# a run measured 54.5s mean latency while the models themselves answer in under a
+# second. The eval was reporting its own rate limiting as pipeline latency.
+#
+# Two means a run still overlaps the slow parts (search, scrape, rerank) without
+# the token budget for one minute being spent in the first three seconds.
+CONCURRENCY = 2
 
 # How far a tracked metric may fall below the baseline before the run fails.
 # Generous on purpose: the synthesizer runs at temperature 0.4 and the web
