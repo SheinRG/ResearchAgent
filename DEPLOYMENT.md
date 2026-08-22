@@ -183,7 +183,7 @@ answers a slightly different question.
 
 ```bash
 curl https://goon-backend.onrender.com/api/health
-# {"status":"healthy","llm":"connected","model":"llama-3.1-8b-instant",
+# {"status":"healthy","llm":"connected","model":"openai/gpt-oss-20b",
 #  "answer_cache":{"hits":0,"misses":0,"hit_rate":0.0},"tracing":"disabled"}
 ```
 

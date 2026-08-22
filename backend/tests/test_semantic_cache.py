@@ -17,7 +17,7 @@ from app.config import get_settings
 from app.services.answer_cache import build_bucket_key, ttl_for
 from app.services.embeddings import cosine, normalize
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 
 # ===========================================================================
@@ -103,7 +103,7 @@ class TestBuildBucketKey:
 
     def test_model_change_changes_the_bucket(self):
         """A model swap must not resurrect answers written by the old one."""
-        assert build_bucket_key("", MODEL) != build_bucket_key("", "llama-3.1-8b-instant")
+        assert build_bucket_key("", MODEL) != build_bucket_key("", "openai/gpt-oss-20b")
 
     def test_name_whitespace_is_ignored(self):
         assert build_bucket_key("  Raghav  ", MODEL) == build_bucket_key("Raghav", MODEL)

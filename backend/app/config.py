@@ -15,11 +15,21 @@ class Settings(BaseSettings):
 
     # --- Groq (Cloud LLM) ---
     groq_api_key: str = ""
-    # Fast model for structured/auxiliary tasks (planning, reflection).
-    groq_model: str = "llama-3.1-8b-instant"
+    # Migrated off Llama on 2026-08-22: Groq decommissioned both
+    # llama-3.1-8b-instant and llama-3.3-70b-versatile, and every call started
+    # returning 404 model_not_found. The pipeline degraded exactly as designed
+    # -- triage fell back to research, synthesis returned the no-sources
+    # message -- so the demo answered nothing while looking like it was working.
+    #
+    # Fast model for structured/auxiliary tasks (triage, follow-ups). It must
+    # hold JSON mode: triage's whole contract is a structured response, and of
+    # the models Groq now serves, gpt-oss-20b is the one that passes Groq's JSON
+    # validation. gpt-oss-120b and qwen3.6-27b both fail it, and qwen
+    # additionally streams <think> reasoning that would land in the answer.
+    groq_model: str = "openai/gpt-oss-20b"
     # Stronger model for the final synthesized answer. Set equal to groq_model
     # to trade answer quality for lower cost/latency.
-    groq_synth_model: str = "llama-3.3-70b-versatile"
+    groq_synth_model: str = "openai/gpt-oss-120b"
     groq_timeout: int = 60  # seconds
     # Headroom for a thorough, well-developed answer (multi-paragraph + a table
     # or list) without inviting rambling. The synthesizer scales depth to the

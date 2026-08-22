@@ -122,7 +122,7 @@ User Query
 |-------|-----------|
 | **Frontend** | Next.js 16, React 19, Vanilla CSS, Motion, Zustand |
 | **Backend** | Python 3.12, FastAPI, LangGraph |
-| **LLM** | Groq Cloud — `llama-3.1-8b-instant` (route/decompose) + `llama-3.3-70b-versatile` (synthesis) |
+| **LLM** | Groq Cloud — `openai/gpt-oss-20b` (route/decompose) + `openai/gpt-oss-120b` (synthesis) |
 | **Search + Read** | Tavily (primary) · Serper (images + fallback) |
 | **Extraction** | Trafilatura (fallback scrape path) · pypdf + python-docx (uploads) |
 | **Re-ranking** | FlashRank (CPU-only) — `TinyBERT-L-2` for small instances, `MiniLM-L-12` for quality |
@@ -313,8 +313,8 @@ Backend variables (see [`backend/.env.example`](backend/.env.example)):
 | Variable | Description | Default / Example |
 |----------|-------------|-------------------|
 | `GROQ_API_KEY` | Groq Cloud API key (**required**) | `gsk_...` |
-| `GROQ_MODEL` | Fast model for triage/decomposition | `llama-3.1-8b-instant` |
-| `GROQ_SYNTH_MODEL` | Strong model for synthesis | `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | Fast model for triage/decomposition | `openai/gpt-oss-20b` |
+| `GROQ_SYNTH_MODEL` | Strong model for synthesis | `openai/gpt-oss-120b` |
 | `SERPER_API_KEY` | Serper key — images + fallback search (**required**) | `...` |
 | `TAVILY_API_KEY` | Tavily key — primary search+read (recommended) | `tvly-...` |
 | `USE_TAVILY_SEARCH` | Use Tavily; set `false` to fall back to Serper+scrape | `true` |

@@ -107,7 +107,7 @@ class TestDisabled:
         assert observation is tracing.NULL_OBSERVATION
 
     def test_generation_still_works(self):
-        with tracing.generation("synthesis", model="llama-3.3-70b-versatile") as gen:
+        with tracing.generation("synthesis", model="openai/gpt-oss-120b") as gen:
             gen.update(output="hello", usage_details={"input": 1, "output": 2})
 
     def test_request_scope_is_transparent(self):
@@ -138,11 +138,11 @@ class TestEnabled:
         assert fake_client.closed == ["rerank"]
 
     def test_generation_records_type_and_model(self, fake_client):
-        with tracing.generation("synthesis", model="llama-3.3-70b-versatile") as gen:
+        with tracing.generation("synthesis", model="openai/gpt-oss-120b") as gen:
             gen.update(output="answer", usage_details={"input": 10, "output": 5})
 
         assert fake_client.started[0]["as_type"] == "generation"
-        assert fake_client.started[0]["model"] == "llama-3.3-70b-versatile"
+        assert fake_client.started[0]["model"] == "openai/gpt-oss-120b"
         assert fake_client.spans[0].observation.updates[0]["output"] == "answer"
 
     def test_nested_spans_all_close(self, fake_client):
@@ -263,7 +263,7 @@ class TestUsageDetails:
     def test_maps_token_usage_to_langfuse_shape(self):
         usage = TokenUsage(
             stage="synthesis",
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             prompt_tokens=4000,
             completion_tokens=700,
             total_tokens=4700,
@@ -288,16 +288,18 @@ class TestCostDetails:
     def test_splits_cost_into_input_and_output(self):
         usage = TokenUsage(
             stage="synthesis",
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             prompt_tokens=1_000_000,
             completion_tokens=1_000_000,
             total_tokens=2_000_000,
         )
         details = tracing.cost_details(usage)
 
-        assert details["input"] == pytest.approx(0.59)
-        assert details["output"] == pytest.approx(0.79)
-        assert details["total"] == pytest.approx(1.38)
+        # 1M tokens each way at gpt-oss-120b's published rate, so the numbers
+        # are the price table itself. They move whenever MODEL_PRICES does.
+        assert details["input"] == pytest.approx(0.15)
+        assert details["output"] == pytest.approx(0.60)
+        assert details["total"] == pytest.approx(0.75)
 
     def test_agrees_with_the_figure_shown_in_the_ui(self):
         """The trace and the done bar must not disagree about what a turn cost."""
@@ -305,7 +307,7 @@ class TestCostDetails:
 
         usage = TokenUsage(
             stage="synthesis",
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             prompt_tokens=4000,
             completion_tokens=700,
             total_tokens=4700,

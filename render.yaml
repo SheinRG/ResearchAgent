@@ -32,9 +32,9 @@ services:
       - key: GOOGLE_CLIENT_ID
         sync: false                # optional; leave blank to disable Google login
       - key: GROQ_MODEL
-        value: llama-3.1-8b-instant
+        value: openai/gpt-oss-20b
       - key: GROQ_SYNTH_MODEL
-        value: llama-3.3-70b-versatile
+        value: openai/gpt-oss-120b
       # Lightweight reranker so the service fits a small instance. Remove this
       # (or set to ms-marco-MiniLM-L-12-v2) on a >=2GB plan for better ranking.
       - key: RERANKER_MODEL

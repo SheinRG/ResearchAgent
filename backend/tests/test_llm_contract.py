@@ -31,7 +31,7 @@ MESSAGES = [{"role": "user", "content": "hello"}]
 
 
 def kwargs():
-    return stream_request_kwargs("llama-3.3-70b-versatile", MESSAGES, 0.4, 2000)
+    return stream_request_kwargs("openai/gpt-oss-120b", MESSAGES, 0.4, 2000)
 
 
 class TestStreamRequestKwargs:

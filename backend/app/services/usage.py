@@ -66,9 +66,16 @@ UsageCallback = Callable[[TokenUsage], None]
 # unknown model is priced at 0.0 rather than guessed, and the miss is logged
 # once so swapping GROQ_SYNTH_MODEL cannot silently zero the cost line without
 # leaving a trace.
+# USD per 1M tokens, (input, output). Verified against Groq's published pricing
+# on 2026-08-22, when the Llama models these replaced were decommissioned.
+#
+# Worth noting for the cost story: the forced migration made the pipeline
+# CHEAPER. Synthesis dominates token volume, and the old 70b billed 0.59/0.79
+# against gpt-oss-120b's 0.15/0.60. Triage rose slightly (0.05 -> 0.075 in) but
+# spends a fraction of the tokens.
 MODEL_PRICES: dict[str, tuple[float, float]] = {
-    "llama-3.1-8b-instant": (0.05, 0.08),
-    "llama-3.3-70b-versatile": (0.59, 0.79),
+    "openai/gpt-oss-20b": (0.075, 0.30),
+    "openai/gpt-oss-120b": (0.15, 0.60),
 }
 
 _PRICE_UNIT_TOKENS = 1_000_000

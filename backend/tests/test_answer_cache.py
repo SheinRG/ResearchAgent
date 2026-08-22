@@ -19,7 +19,7 @@ from app.services.answer_cache import (
     iter_replay_events,
 )
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 
 def key(query, history=None, user_name="", model=MODEL):
