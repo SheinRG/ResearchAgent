@@ -301,6 +301,70 @@ def test_load_predictions_survives_a_truncated_tail(tmp_path):
     assert set(loaded) == {"p0"}
 
 
+# --- truncated reasoning ---------------------------------------------------
+
+class _StubClient:
+    """Records the token budget of every call and replays scripted replies."""
+
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.budgets = []
+
+    async def generate(self, prompt, *, system="", temperature=0.0, model="",
+                       max_tokens=0, stage=""):
+        self.budgets.append(max_tokens)
+        return self.replies.pop(0) if self.replies else ""
+
+
+def _run_predict(monkeypatch, tmp_path, replies, candidates):
+    import app.services.llm as llm_module
+
+    client = _StubClient(replies)
+    monkeypatch.setattr(llm_module, "get_llm_client", lambda: client)
+    monkeypatch.setattr(jd, "PRED_DIR", tmp_path)
+    import asyncio
+    asyncio.run(jd.predict_groq(candidates, "m", tpm_budget=10 ** 9))
+    return client
+
+
+def test_empty_reply_is_retried_with_more_room(monkeypatch, tmp_path):
+    """An empty reply means reasoning ran out of budget, not that the model had
+    no opinion. Recording it as wrong would score the harness and understate a
+    baseline the fine-tune has to beat."""
+    client = _run_predict(monkeypatch, tmp_path, ["", "supported"], [_candidate("p0")])
+
+    recorded = jd.load_predictions(tmp_path / "m.jsonl")
+    assert recorded["p0"]["verdict"] == SUPPORTED
+    assert len(client.budgets) == 2
+    assert client.budgets[1] > client.budgets[0]
+
+
+def test_a_genuinely_unparseable_reply_is_recorded_as_a_failure(monkeypatch, tmp_path):
+    """The retry must not turn into a loop that manufactures an answer — one
+    extra attempt, then it counts against the judge."""
+    client = _run_predict(
+        monkeypatch, tmp_path, ["no idea", "still no idea"], [_candidate("p0")]
+    )
+
+    recorded = jd.load_predictions(tmp_path / "m.jsonl")
+    assert recorded["p0"]["verdict"] is None
+    assert len(client.budgets) == 2
+
+
+def test_raw_is_kept_only_when_parsing_failed(monkeypatch, tmp_path):
+    """Raw replies can quote the evidence, and these files are committed —
+    so they are stored only where they say something the verdict doesn't."""
+    _run_predict(
+        monkeypatch, tmp_path,
+        ["supported", "hmm", "hmm"],
+        [_candidate("p0"), _candidate("p1")],
+    )
+
+    recorded = jd.load_predictions(tmp_path / "m.jsonl")
+    assert "raw" not in recorded["p0"]
+    assert recorded["p1"]["raw"] == "hmm"
+
+
 def test_predict_lexical_is_idempotent(tmp_path, monkeypatch):
     """Re-running must not double-count — the file is a cache, not a log of
     attempts."""

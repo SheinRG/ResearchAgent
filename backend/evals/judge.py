@@ -68,6 +68,19 @@ ALIASES = ("reference", "teacher")
 # paces itself instead of collecting 429s and burning retry budget.
 _TPM_BUDGET = 6000
 
+# The gpt-oss models reason before answering, and the reasoning bills against
+# the completion budget. At 512 the model spent the whole allowance thinking
+# and returned an *empty* string — measured, not assumed: the same pair
+# answered correctly at 1024. A cap that truncates costs the judge a point it
+# had earned, which would understate the baseline and flatter anything
+# measured against it, so the ceiling is set well clear of what was needed.
+_MAX_TOKENS = 2048
+
+# Reasoning tokens a pair is assumed to spend, for pacing only. Deliberately
+# nearer what the probe showed than the one-word answer would suggest —
+# underestimating here means pacing into 429s.
+_REASONING_ALLOWANCE = 600
+
 _VERDICT = re.compile(r"\b(unsupported|supported)\b", re.IGNORECASE)
 
 _SYSTEM = (
@@ -248,9 +261,9 @@ async def predict_groq(
     done = 0
     for cand in todo:
         prompt = build_prompt(cand.get("sentence", ""), cand.get("evidence", ""))
-        # Rough count (chars/4) plus generous headroom for the model's
-        # reasoning tokens, which bill against the same cap.
-        estimate = len(prompt) // 4 + len(_SYSTEM) // 4 + 300
+        # Rough count (chars/4) plus headroom for the model's reasoning
+        # tokens, which bill against the same cap.
+        estimate = len(prompt) // 4 + len(_SYSTEM) // 4 + _REASONING_ALLOWANCE
 
         if window_tokens + estimate > tpm_budget:
             wait = max(0.0, 60.0 - (time.monotonic() - window_start))
@@ -267,13 +280,28 @@ async def predict_groq(
             system=_SYSTEM,
             temperature=0.0,
             model=model,
-            # Reasoning models spend completion tokens thinking before the
-            # one-word answer; a tight cap would truncate mid-thought and
-            # return nothing parseable.
-            max_tokens=512,
+            max_tokens=_MAX_TOKENS,
             stage="judge",
         )
         verdict = parse_verdict(reply)
+
+        # An empty reply is the signature of reasoning that ran out of budget
+        # rather than of a model with no opinion, so it gets one more try with
+        # room to finish. Recording the truncation as a wrong answer would be
+        # scoring the harness, and it would understate a baseline the
+        # fine-tune is required to beat.
+        if verdict is None:
+            window_tokens += _MAX_TOKENS
+            reply = await client.generate(
+                prompt,
+                system=_SYSTEM,
+                temperature=0.0,
+                model=model,
+                max_tokens=_MAX_TOKENS * 2,
+                stage="judge",
+            )
+            verdict = parse_verdict(reply)
+
         score = 1.0 if verdict == SUPPORTED else 0.0
         append_prediction(path, _record(cand["pair_id"], model, verdict, score, reply))
         done += 1
