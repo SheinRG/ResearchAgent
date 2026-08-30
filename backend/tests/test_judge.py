@@ -301,6 +301,53 @@ def test_load_predictions_survives_a_truncated_tail(tmp_path):
     assert set(loaded) == {"p0"}
 
 
+# --- selection order -------------------------------------------------------
+
+def test_judge_and_labeller_walk_the_same_order():
+    """`--limit N` has to mean the same N pairs in both tools. When it did not,
+    79 of 225 predictions were spent on pairs the labeller would never reach,
+    and 54 pairs she would reach had no prediction — on a hard daily cap."""
+    from evals.label import pending
+
+    candidates = [_candidate(f"p{i}") for i in range(50)]
+    judged = [c["pair_id"] for c in jd.selection_order(candidates)[:20]]
+    labelled = [c["pair_id"] for c in pending(candidates, {}, seed=0)[:20]]
+
+    assert judged == labelled
+
+
+def test_selection_order_is_a_permutation_not_a_filter():
+    candidates = [_candidate(f"p{i}") for i in range(50)]
+    ordered = jd.selection_order(candidates)
+    assert {c["pair_id"] for c in ordered} == {c["pair_id"] for c in candidates}
+    assert len(ordered) == 50
+
+
+def test_selection_order_is_stable_across_calls():
+    """A resumed run must not re-shuffle, or it judges a different subset than
+    the one it started."""
+    candidates = [_candidate(f"p{i}") for i in range(50)]
+    assert [c["pair_id"] for c in jd.selection_order(candidates)] == \
+           [c["pair_id"] for c in jd.selection_order(candidates)]
+
+
+# --- the daily token cap ---------------------------------------------------
+
+def test_daily_cap_is_told_apart_from_an_ordinary_rate_limit():
+    """Both are 429s. Only the daily one is pointless to retry, and the
+    difference lives in the message text alone."""
+    daily = Exception(
+        "Error code: 429 - Rate limit reached for model `openai/gpt-oss-20b` "
+        "on tokens per day (TPD): Limit 200000, Used 199486"
+    )
+    per_minute = Exception(
+        "Error code: 429 - Rate limit reached on tokens per minute (TPM): "
+        "Limit 8000, Used 7900"
+    )
+    assert jd._is_daily_cap(daily) is True
+    assert jd._is_daily_cap(per_minute) is False
+
+
 # --- the pre-registered bar ------------------------------------------------
 
 def _row(judge, f1, n=100):
@@ -360,7 +407,8 @@ def test_bar_ignores_judges_with_no_scored_pairs():
 # --- truncated reasoning ---------------------------------------------------
 
 class _StubClient:
-    """Records the token budget of every call and replays scripted replies."""
+    """Records the token budget of every call and replays scripted replies.
+    A reply that is an Exception instance is raised instead of returned."""
 
     def __init__(self, replies):
         self.replies = list(replies)
@@ -369,7 +417,10 @@ class _StubClient:
     async def generate(self, prompt, *, system="", temperature=0.0, model="",
                        max_tokens=0, stage=""):
         self.budgets.append(max_tokens)
-        return self.replies.pop(0) if self.replies else ""
+        reply = self.replies.pop(0) if self.replies else ""
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
 
 def _run_predict(monkeypatch, tmp_path, replies, candidates):
@@ -419,6 +470,27 @@ def test_raw_is_kept_only_when_parsing_failed(monkeypatch, tmp_path):
     recorded = jd.load_predictions(tmp_path / "m.jsonl")
     assert "raw" not in recorded["p0"]
     assert recorded["p1"]["raw"] == "hmm"
+
+
+def test_daily_cap_keeps_the_work_already_paid_for(monkeypatch, tmp_path):
+    """Hitting the cap must stop the run, not lose it. Everything judged
+    before it is already bought and has to survive."""
+    candidates = [_candidate(f"p{i}") for i in range(5)]
+    cap = Exception("429 - rate_limit_exceeded on tokens per day (TPD): Limit 200000")
+    _run_predict(monkeypatch, tmp_path, ["supported", "unsupported", cap], candidates)
+
+    recorded = jd.load_predictions(tmp_path / "m.jsonl")
+    assert set(recorded) == {"p0", "p1"}
+    assert recorded["p1"]["verdict"] == UNSUPPORTED
+
+
+def test_an_error_that_is_not_the_daily_cap_still_propagates(monkeypatch, tmp_path):
+    """Swallowing every exception would turn a broken key or a bad model id
+    into a silently short run."""
+    candidates = [_candidate("p0")]
+    boom = Exception("500 - internal server error")
+    with pytest.raises(Exception, match="internal server error"):
+        _run_predict(monkeypatch, tmp_path, [boom], candidates)
 
 
 def test_predict_lexical_is_idempotent(tmp_path, monkeypatch):

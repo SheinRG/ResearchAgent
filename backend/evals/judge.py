@@ -50,6 +50,7 @@ from evals.label import (
     agreement,
     load_candidates,
     load_labels,
+    pending,
 )
 
 EVALS_DIR = Path(__file__).parent
@@ -63,10 +64,15 @@ PRED_DIR = EVALS_DIR / "results" / "judge"
 # meaning anything the next time Groq retires a model.
 ALIASES = ("reference", "teacher")
 
-# Groq's free tier caps tokens per MINUTE (8k), and that cap — not model speed
-# — is the real ceiling. The client-side budget stays under it so the run
-# paces itself instead of collecting 429s and burning retry budget.
-_TPM_BUDGET = 6000
+# Per-minute pacing. This is NOT the constraint that actually bites: a full
+# 311-pair run died at 225 on tokens per DAY (200k on the free tier, ~890
+# tokens a pair), having never once hit the per-minute ceiling. Pacing at 6000
+# stretched that run to 47 minutes and bought nothing, so the budget now sits
+# high enough to stay out of the way while still smoothing bursts.
+#
+# The daily cap is the one to plan around: it is why `--limit` exists and why
+# the run order matches the labeller's. Roughly 220 pairs per model per day.
+_TPM_BUDGET = 14000
 
 # The gpt-oss models reason before answering, and the reasoning bills against
 # the completion budget. At 512 the model spent the whole allowance thinking
@@ -87,6 +93,23 @@ _SYSTEM = (
     "You judge whether a piece of evidence supports a sentence from a "
     "research answer. Reply with exactly one word: supported or unsupported."
 )
+
+
+def selection_order(candidates: list[dict], seed: int = 0) -> list[dict]:
+    """
+    Candidates in the order the labeller will meet them.
+
+    Delegates to ``label.pending`` rather than re-deriving the shuffle, for the
+    same reason capture reuses ``select_evidence``: two implementations of the
+    same order are two things that can drift.
+
+    This is what makes ``--limit N`` mean the same set of pairs here as it does
+    in ``label.py``. Judging in file order instead spends a hard daily token
+    budget on pairs nobody will ever label — measured, when it happened: 79 of
+    225 predictions landed outside the 200 the labeller would see, while 54
+    pairs inside it had no prediction at all.
+    """
+    return pending(candidates, {}, seed=seed)
 
 
 def build_prompt(sentence: str, evidence: str) -> str:
@@ -224,6 +247,19 @@ def predict_lexical(candidates: list[dict]) -> dict[str, int]:
 # Prompted Groq judges
 # ---------------------------------------------------------------------------
 
+def _is_daily_cap(error: Exception) -> bool:
+    """
+    Whether this is the per-*day* token cap rather than a passing 429.
+
+    Both arrive as 429s and the client's retry loop treats them alike, which is
+    right for the per-minute limit and useless for this one: the daily cap
+    clears tomorrow. Matching on the message is unlovely, but the distinction
+    exists only in the text — the status code is identical either way.
+    """
+    text = str(error).lower()
+    return "tokens per day" in text or "tpd" in text
+
+
 def _resolve_alias(alias: str) -> str:
     from app.config import get_settings
 
@@ -275,14 +311,28 @@ async def predict_groq(
             window_tokens = 0
         window_tokens += estimate
 
-        reply = await client.generate(
-            prompt,
-            system=_SYSTEM,
-            temperature=0.0,
-            model=model,
-            max_tokens=_MAX_TOKENS,
-            stage="judge",
-        )
+        try:
+            reply = await client.generate(
+                prompt,
+                system=_SYSTEM,
+                temperature=0.0,
+                model=model,
+                max_tokens=_MAX_TOKENS,
+                stage="judge",
+            )
+        except Exception as e:
+            # The daily token cap is not a transient failure the retry loop can
+            # wait out — it clears tomorrow, not in seconds. Everything judged
+            # so far is already on disk, so the useful thing is to say where it
+            # stopped and stop, rather than bury that under a traceback.
+            if _is_daily_cap(e):
+                print(f"\n  Daily token cap reached for {model}. "
+                      f"{done}/{len(todo)} judged this run; {len(have) + done} cached total.")
+                print("  Everything judged so far is saved. Re-run the same command "
+                      "tomorrow to continue where it stopped.")
+                return done
+            raise
+
         verdict = parse_verdict(reply)
 
         # An empty reply is the signature of reasoning that ran out of budget
@@ -544,7 +594,11 @@ def main() -> int:
                         help="Cache both lexical-overlap scores for every pair. No network.")
     parser.add_argument("--predict", metavar="MODEL",
                         help="Run a prompted Groq judge: 'reference', 'teacher', or a model id.")
-    parser.add_argument("--limit", type=int, default=0, help="Cap pairs for a smoke run.")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Judge only the first N in the labeller's order — "
+                             "use the same N as `label --limit N`.")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Selection-order seed. Must match label.py's.")
     parser.add_argument("--score", action="store_true",
                         help="Score every cached prediction file against gold.")
     args = parser.parse_args()
@@ -554,6 +608,11 @@ def main() -> int:
     except FileNotFoundError as e:
         print(e, file=sys.stderr)
         return 1
+
+    # Judge in the order the labeller labels, so --limit picks the same pairs
+    # in both tools and a scarce daily token budget is spent on pairs that will
+    # actually have a gold label to be scored against.
+    candidates = selection_order(candidates, seed=args.seed)
 
     did_something = False
 

@@ -135,12 +135,26 @@ the baselines named in `finetune/PREREGISTRATION.md` and scores anything in
 `results/judge/` against the gold set.
 
 ```bash
-python -m evals.judge --lexical             # cache both overlap scores; no network
-python -m evals.judge --predict reference   # prompted gpt-oss-20b
-python -m evals.judge --predict teacher     # prompted gpt-oss-120b
-python -m evals.judge --predict reference --limit 5   # smoke run
-python -m evals.judge --score               # everything vs gold
+python -m evals.judge --lexical                          # both overlap scores; no network
+python -m evals.judge --predict reference --limit 200    # prompted gpt-oss-20b
+python -m evals.judge --predict teacher --limit 200      # prompted gpt-oss-120b
+python -m evals.judge --predict reference --limit 5      # smoke run
+python -m evals.judge --score                            # everything vs gold
 ```
+
+**Use the same `--limit` here as in `label.py`.** Both walk the candidates in
+the same seeded order, so `--limit 200` judges exactly the 200 pairs the
+labeller will label. Judging in file order instead — which is what happened
+first — spent 79 of 225 predictions on pairs that would never be labelled while
+leaving 54 labelled pairs unjudged, which on a daily token cap is a day lost.
+
+**The binding constraint is tokens per _day_, not per minute.** The free tier
+allows 200k per model per day and a pair costs ~890, so roughly **220 pairs per
+model per day** — a full 311-pair run cannot finish in one sitting. The
+per-minute pacing exists only to smooth bursts; it was never what stopped a
+run. Hitting the daily cap is not an error: the run reports where it stopped
+and saves everything judged so far, and re-running the same command tomorrow
+continues from there.
 
 **A judge sees exactly what the labeller sees** — the sentence and the
 evidence, and nothing else. No query, no source title, no pair type. A judge
