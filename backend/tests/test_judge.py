@@ -301,6 +301,62 @@ def test_load_predictions_survives_a_truncated_tail(tmp_path):
     assert set(loaded) == {"p0"}
 
 
+# --- the pre-registered bar ------------------------------------------------
+
+def _row(judge, f1, n=100):
+    return {"judge": judge, "n": n, "macro_f1": f1}
+
+
+def test_bar_is_measured_against_the_stronger_lexical_variant():
+    """Taking the weaker variant would lower the bar for free — the whole
+    point of computing both is to be held to the harder one."""
+    rows = [
+        _row("lexical-jaccard", 0.55),
+        _row("lexical-coverage", 0.62),
+        _row("openai-gpt-oss-20b", 0.80),
+    ]
+    bar = jd.verdict_on_bar(rows, "openai/gpt-oss-20b")
+
+    assert bar["strongest_lexical"]["judge"] == "lexical-coverage"
+    assert bar["targets"]["beat_lexical"] == pytest.approx(0.77)
+
+
+def test_gate_fires_when_the_prompted_judge_leaves_no_headroom():
+    rows = [_row("lexical-coverage", 0.60), _row("openai-gpt-oss-20b", 0.95)]
+    bar = jd.verdict_on_bar(rows, "openai/gpt-oss-20b")
+    assert bar["gate"]["no_headroom"] is True
+
+
+def test_gate_stays_open_when_there_is_room_to_improve():
+    rows = [_row("lexical-coverage", 0.60), _row("openai-gpt-oss-20b", 0.82)]
+    bar = jd.verdict_on_bar(rows, "openai/gpt-oss-20b")
+    assert bar["gate"]["no_headroom"] is False
+    assert bar["targets"]["stretch_reference"] == pytest.approx(0.79)
+
+
+def test_zero_shot_target_is_absent_until_qwen_has_been_run():
+    """The second must-hit clause cannot be invented from the judges that
+    happen to exist — it stays missing until its baseline is measured."""
+    rows = [_row("lexical-coverage", 0.60), _row("openai-gpt-oss-20b", 0.82)]
+    bar = jd.verdict_on_bar(rows, "openai/gpt-oss-20b")
+    assert "beat_zero_shot" not in bar["targets"]
+
+    rows.append(_row("qwen3-1.7b-zero-shot", 0.65))
+    bar = jd.verdict_on_bar(rows, "openai/gpt-oss-20b")
+    assert bar["targets"]["beat_zero_shot"] == pytest.approx(0.75)
+
+
+def test_bar_ignores_judges_with_no_scored_pairs():
+    """A judge with n=0 has no number; letting it win 'strongest lexical'
+    would set the bar off an empty file."""
+    rows = [
+        {"judge": "lexical-jaccard", "n": 0, "macro_f1": 0.0},
+        _row("lexical-coverage", 0.60),
+    ]
+    bar = jd.verdict_on_bar(rows, "")
+    assert bar["strongest_lexical"]["judge"] == "lexical-coverage"
+
+
 # --- truncated reasoning ---------------------------------------------------
 
 class _StubClient:

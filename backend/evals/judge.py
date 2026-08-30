@@ -400,10 +400,107 @@ def score_judges(
     return rows
 
 
+def verdict_on_bar(rows: list[dict], reference_model: str = "") -> dict:
+    """
+    Read the pre-registered bar off the scored baselines.
+
+    Everything here is stated in ``finetune/PREREGISTRATION.md`` and is
+    deliberately computed rather than remembered: a bar the tool restates from
+    the numbers is one nobody can quietly round in their favour later.
+
+    The gate is the part that matters now. If the prompted reference judge is
+    already near-perfect on gold, "match the bigger model" has no headroom left
+    to demonstrate and the project is supposed to stop and rethink rather than
+    spend training compute proving nothing.
+    """
+    by_judge = {row["judge"]: row for row in rows if row.get("n")}
+
+    lexical = {name: row for name, row in by_judge.items() if name.startswith("lexical-")}
+    strongest = max(lexical.values(), key=lambda r: r["macro_f1"], default=None)
+
+    reference = None
+    if reference_model:
+        reference = by_judge.get(_pred_path(reference_model).stem)
+    zero_shot = next(
+        (row for name, row in by_judge.items() if "qwen" in name and "zero" in name),
+        None,
+    )
+
+    out: dict = {
+        "strongest_lexical": strongest,
+        "reference": reference,
+        "zero_shot": zero_shot,
+        "targets": {},
+        "gate": None,
+    }
+    if strongest:
+        out["targets"]["beat_lexical"] = strongest["macro_f1"] + 0.15
+    if zero_shot:
+        out["targets"]["beat_zero_shot"] = zero_shot["macro_f1"] + 0.10
+    if reference:
+        out["targets"]["stretch_reference"] = reference["macro_f1"] - 0.03
+        # ">= ~0.94" in the pre-registration. Stated as a strict comparison so
+        # the tool never has to decide what "about" means.
+        out["gate"] = {
+            "reference_f1": reference["macro_f1"],
+            "no_headroom": reference["macro_f1"] >= 0.94,
+        }
+    return out
+
+
+def _print_bar(bar: dict) -> None:
+    strongest, reference = bar["strongest_lexical"], bar["reference"]
+
+    if strongest:
+        print(f"  Strongest lexical baseline: {strongest['judge']} "
+              f"at {strongest['macro_f1']:.3f}")
+    if not reference:
+        print("  Reference judge not scored yet — the Milestone 1 gate is still open.")
+        print("    python -m evals.judge --predict reference\n")
+        return
+
+    targets = bar["targets"]
+    print("\n  Pre-registered bar for the trained judge (finetune/PREREGISTRATION.md):")
+    if "beat_lexical" in targets:
+        print(f"    must hit   >= {targets['beat_lexical']:.3f}  "
+              f"(strongest lexical + 15 pts)")
+    if "beat_zero_shot" in targets:
+        print(f"    must hit   >= {targets['beat_zero_shot']:.3f}  "
+              f"(zero-shot Qwen3-1.7B + 10 pts)")
+    else:
+        print("    must hit   -- pending zero-shot Qwen3-1.7B, produced in finetune/")
+    if "stretch_reference" in targets:
+        print(f"    stretch    >= {targets['stretch_reference']:.3f}  "
+              f"(within 3 pts of prompted {reference['judge']})")
+
+    gate = bar["gate"]
+    print(f"\n  Milestone 1 gate: reference judge scores {gate['reference_f1']:.3f} on gold.")
+    if gate["no_headroom"]:
+        print("    STOP AND REVISIT. At >= 0.94 the prompted model has essentially")
+        print("    solved the task, so 'match the bigger model' has no headroom to")
+        print("    demonstrate and training compute would prove nothing.")
+    else:
+        print("    Headroom exists — proceed to Milestone 2 (training data).")
+    print()
+
+
 def _print_scores(rows: list[dict], gold_first: dict, gold_recheck: dict) -> None:
     if not rows:
         print("\n  No prediction files in", PRED_DIR)
         print("  Produce some: python -m evals.judge --lexical / --predict reference\n")
+        return
+
+    # Every judge scoring zero over zero pairs means the gold set is missing,
+    # not that the judges failed. Saying "run --predict" here would send
+    # someone to re-run predictions that already exist.
+    if not any(row.get("n") for row in rows):
+        print(f"\n  {len(rows)} prediction file(s) cached, but nothing to score them "
+              "against yet.")
+        print("  The gold set is hand-labelled and cannot be generated — it is what")
+        print("  every number here gets measured by:\n")
+        print("    python -m evals.label --limit 200   # label, blind; resumable")
+        print("    python -m evals.label --recheck 40  # then measure self-agreement")
+        print("    python -m evals.judge --score       # then this becomes a result\n")
         return
 
     print(f"\n  {'judge':<28} {'n':>5}  {'macro-F1':>8}  notes")
@@ -416,6 +513,9 @@ def _print_scores(rows: list[dict], gold_first: dict, gold_recheck: dict) -> Non
         if row.get("note"):
             notes.append(row["note"])
         print(f"  {row['judge']:<28} {row['n']:>5}  {row['macro_f1']:>8.3f}  {', '.join(notes)}")
+
+    print()
+    _print_bar(verdict_on_bar(rows, _resolve_alias("reference")))
 
     self_agree = agreement(gold_first, gold_recheck)
     if self_agree["compared"]:
