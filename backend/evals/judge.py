@@ -534,6 +534,66 @@ def _print_bar(bar: dict) -> None:
     print()
 
 
+def discriminate(candidates: list[dict], pred_dir: Path = PRED_DIR) -> list[dict]:
+    """
+    How differently each judge treats cited pairs versus swapped ones.
+
+    The one check on the data plan that needs no gold labels. The swapped pairs
+    are the free negatives the whole training set leans on, and `README.md`
+    states the condition they have to meet: if they come back mostly
+    *supported*, they are not negatives and the plan needs revisiting.
+
+    A judge that answers the same way to both is also visible here, and would
+    mean the pairs carry no signal to learn from — worth knowing before anyone
+    spends an hour labelling rather than after.
+    """
+    by_id = {c["pair_id"]: c for c in candidates}
+    rows = []
+    for path in sorted(Path(pred_dir).glob("*.jsonl")):
+        preds = load_predictions(path)
+        buckets: dict[str, list[Optional[str]]] = {}
+        for pair_id, record in preds.items():
+            pair_type = by_id.get(pair_id, {}).get("pair_type", "unknown")
+            buckets.setdefault(pair_type, []).append(record.get("verdict"))
+        if not any(v for verdicts in buckets.values() for v in verdicts):
+            continue  # lexical files carry scores, not verdicts
+
+        rates = {
+            pair_type: (
+                sum(1 for v in verdicts if v == SUPPORTED) / len(verdicts),
+                len(verdicts),
+            )
+            for pair_type, verdicts in buckets.items()
+        }
+        cited = rates.get("cited", (0.0, 0))
+        swapped = rates.get("swapped", (0.0, 0))
+        rows.append({
+            "judge": path.stem,
+            "rates": rates,
+            "gap": cited[0] - swapped[0],
+        })
+    return rows
+
+
+def _print_discrimination(rows: list[dict]) -> None:
+    if not rows:
+        print("\n  No judge with verdicts yet — run --predict first.\n")
+        return
+
+    print("\n  Support rate by capture type (no gold labels needed):\n")
+    for row in rows:
+        print(f"  {row['judge']}")
+        for pair_type, (rate, n) in sorted(row["rates"].items()):
+            print(f"    {pair_type:<8} n={n:<5} judged supported {rate:>5.0%}")
+        print(f"    gap (cited - swapped): {row['gap']:+.0%}")
+
+    print("\n  What to read here:")
+    print("    Swapped pairs mostly SUPPORTED would mean the free negatives are")
+    print("    not negatives, and the data plan needs revisiting.")
+    print("    A gap near zero would mean the pairs carry no signal to learn.")
+    print("  Judge opinion, not ground truth — only the gold set settles it.\n")
+
+
 def _print_scores(rows: list[dict], gold_first: dict, gold_recheck: dict) -> None:
     if not rows:
         print("\n  No prediction files in", PRED_DIR)
@@ -601,6 +661,9 @@ def main() -> int:
                         help="Selection-order seed. Must match label.py's.")
     parser.add_argument("--score", action="store_true",
                         help="Score every cached prediction file against gold.")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Cited-vs-swapped support rates. Checks the data plan "
+                             "without gold labels.")
     args = parser.parse_args()
 
     try:
@@ -625,6 +688,10 @@ def main() -> int:
     if args.predict:
         model = _resolve_alias(args.predict)
         asyncio.run(predict_groq(candidates, model, limit=args.limit))
+        did_something = True
+
+    if args.diagnose:
+        _print_discrimination(discriminate(candidates))
         did_something = True
 
     if args.score:

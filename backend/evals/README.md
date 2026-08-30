@@ -183,6 +183,29 @@ Unlike the candidates they refer to, prediction files **are committed**: they
 carry no scraped text, and timestamps earlier than the gold labels are the
 evidence that predictions were made without the answers in hand.
 
+### Checking the data plan before labelling
+
+```bash
+python -m evals.judge --diagnose
+```
+
+`--diagnose` reports each judge's support rate for `cited` pairs against
+`swapped` ones. It needs no gold labels, which makes it the one check worth
+running *before* committing an hour to labelling:
+
+- **Swapped pairs mostly supported** would mean the free negatives are not
+  negatives, and the data plan needs revisiting.
+- **A gap near zero** would mean the pairs carry no signal to learn from.
+
+On the first run both prompted judges cleared it comfortably — swapped pairs
+judged supported 0–3% of the time against 42% for cited, a gap of roughly 40
+points — so the same-run chunk swaps really are negatives.
+
+The other half of that result is worth sitting with: **only 42% of pairs the
+synthesizer actually cited were judged supported.** If the gold labels agree,
+that is the project's premise stated as a number rather than a suspicion. It is
+judge opinion until then.
+
 ## What it measures
 
 **Hard invariants** — these fail the build regardless of history:

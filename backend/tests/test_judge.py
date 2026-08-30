@@ -301,6 +301,53 @@ def test_load_predictions_survives_a_truncated_tail(tmp_path):
     assert set(loaded) == {"p0"}
 
 
+# --- data-plan diagnostic --------------------------------------------------
+
+def test_discriminate_separates_cited_from_swapped(tmp_path):
+    candidates = [
+        _candidate("c1", pair_type="cited"), _candidate("c2", pair_type="cited"),
+        _candidate("s1", pair_type="swapped"), _candidate("s2", pair_type="swapped"),
+    ]
+    _write(tmp_path / "m.jsonl", [
+        {"pair_id": "c1", "verdict": SUPPORTED, "score": 1.0},
+        {"pair_id": "c2", "verdict": SUPPORTED, "score": 1.0},
+        {"pair_id": "s1", "verdict": UNSUPPORTED, "score": 0.0},
+        {"pair_id": "s2", "verdict": UNSUPPORTED, "score": 0.0},
+    ])
+
+    row = jd.discriminate(candidates, pred_dir=tmp_path)[0]
+    assert row["rates"]["cited"] == (1.0, 2)
+    assert row["rates"]["swapped"] == (0.0, 2)
+    assert row["gap"] == pytest.approx(1.0)
+
+
+def test_discriminate_shows_a_flat_gap_when_negatives_are_not_negatives():
+    """The failure this exists to catch: swapped pairs judged supported as
+    often as cited ones means the free negatives are not negatives."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        d = jd.Path(tmp)
+        candidates = [
+            _candidate("c1", pair_type="cited"),
+            _candidate("s1", pair_type="swapped"),
+        ]
+        _write(d / "m.jsonl", [
+            {"pair_id": "c1", "verdict": SUPPORTED, "score": 1.0},
+            {"pair_id": "s1", "verdict": SUPPORTED, "score": 1.0},
+        ])
+        assert jd.discriminate(candidates, pred_dir=d)[0]["gap"] == pytest.approx(0.0)
+
+
+def test_discriminate_skips_score_only_files(tmp_path):
+    """Lexical files hold continuous scores and no verdicts; including them
+    would report a 0% support rate that means nothing."""
+    candidates = [_candidate("c1", pair_type="cited")]
+    _write(tmp_path / "lexical-jaccard.jsonl", [
+        {"pair_id": "c1", "verdict": None, "score": 0.4},
+    ])
+    assert jd.discriminate(candidates, pred_dir=tmp_path) == []
+
+
 # --- selection order -------------------------------------------------------
 
 def test_judge_and_labeller_walk_the_same_order():
