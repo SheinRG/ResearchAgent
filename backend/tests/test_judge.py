@@ -519,6 +519,30 @@ def test_raw_is_kept_only_when_parsing_failed(monkeypatch, tmp_path):
     assert recorded["p1"]["raw"] == "hmm"
 
 
+def test_limit_bounds_the_slice_not_the_number_of_calls(monkeypatch, tmp_path):
+    """--limit N means "the first N pairs", so a resumed run stays inside the
+    labelled slice. Filtering cached pairs first would make it "the next N
+    unjudged from anywhere" and walk straight out of the gold set."""
+    candidates = [_candidate(f"p{i}") for i in range(10)]
+    ordered = jd.selection_order(candidates)
+
+    # Everything in the first 3 is already judged; only later pairs remain.
+    path = tmp_path / "m.jsonl"
+    for cand in ordered[:3]:
+        jd.append_prediction(path, jd._record(cand["pair_id"], "m", SUPPORTED, 1.0))
+
+    import app.services.llm as llm_module
+    client = _StubClient(["supported"] * 10)
+    monkeypatch.setattr(llm_module, "get_llm_client", lambda: client)
+    monkeypatch.setattr(jd, "PRED_DIR", tmp_path)
+
+    import asyncio
+    judged = asyncio.run(
+        jd.predict_groq(ordered, "m", limit=3, tpm_budget=10 ** 9)
+    )
+    assert judged == 0  # the first 3 are done; it must not reach for more
+
+
 def test_daily_cap_keeps_the_work_already_paid_for(monkeypatch, tmp_path):
     """Hitting the cap must stop the run, not lose it. Everything judged
     before it is already bought and has to survive."""

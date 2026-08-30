@@ -283,9 +283,13 @@ async def predict_groq(
     client = get_llm_client()
     path = _pred_path(model)
     have = load_predictions(path)
-    todo = [c for c in candidates if c["pair_id"] not in have]
+    # Narrow to the labelled slice *before* dropping what is cached. The other
+    # order makes --limit mean "the next N unjudged pairs from anywhere",
+    # which on a resumed run walks straight past the gold set into pairs
+    # nobody will label — the exact waste the shared ordering exists to stop.
     if limit:
-        todo = todo[:limit]
+        candidates = candidates[:limit]
+    todo = [c for c in candidates if c["pair_id"] not in have]
     if not todo:
         print(f"  {model}: nothing to do ({len(have)} cached)")
         return 0

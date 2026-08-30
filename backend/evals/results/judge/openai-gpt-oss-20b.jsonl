@@ -223,3 +223,5 @@
 {"pair_id": "cac91063eafd5a03", "judge": "openai/gpt-oss-20b", "verdict": "unsupported", "score": 0.0, "at": "2026-08-30T18:39:36+00:00"}
 {"pair_id": "e844fd440765f69e", "judge": "openai/gpt-oss-20b", "verdict": "unsupported", "score": 0.0, "at": "2026-08-30T18:39:37+00:00"}
 {"pair_id": "4b3f12d5c46af3d0", "judge": "openai/gpt-oss-20b", "verdict": "unsupported", "score": 0.0, "at": "2026-08-30T18:41:29+00:00"}
+{"pair_id": "a2b124866cf48913", "judge": "openai/gpt-oss-20b", "verdict": "supported", "score": 1.0, "at": "2026-08-30T19:07:38+00:00"}
+{"pair_id": "8b228178bd3074af", "judge": "openai/gpt-oss-20b", "verdict": "unsupported", "score": 0.0, "at": "2026-08-30T19:08:26+00:00"}
