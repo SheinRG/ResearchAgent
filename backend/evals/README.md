@@ -21,6 +21,7 @@ did what it said it did needs only data the pipeline already produces.
 | `baseline.json` | Last accepted numbers. Regressions are measured against this. |
 | `capture.py` | Side errand: records citation-judge candidates while a run happens. |
 | `label.py` | Hand-labels those candidates into the gold set. |
+| `judge.py` | Baseline judges for the citation task, and the scoring that ranks them. |
 
 The split between the checklist and the runner is the important one: the
 scorers are tested on every pull request (`tests/test_scorers.py`,
@@ -125,6 +126,48 @@ scraped text — so it is committable even though the candidates it refers to ar
 not. The `--stats` breakdown by capture type is the check on the data plan: if
 swapped pairs come back mostly *supported*, the free negatives are not
 negatives and the plan needs revisiting.
+
+## Baselines for the citation judge
+
+`judge.py` answers the question the fine-tune exists to ask: *is a trained
+judge actually better than what we already have?* It produces predictions for
+the baselines named in `finetune/PREREGISTRATION.md` and scores anything in
+`results/judge/` against the gold set.
+
+```bash
+python -m evals.judge --lexical             # cache both overlap scores; no network
+python -m evals.judge --predict reference   # prompted gpt-oss-20b
+python -m evals.judge --predict teacher     # prompted gpt-oss-120b
+python -m evals.judge --predict reference --limit 5   # smoke run
+python -m evals.judge --score               # everything vs gold
+```
+
+**A judge sees exactly what the labeller sees** — the sentence and the
+evidence, and nothing else. No query, no source title, no pair type. A judge
+given more context than the human had is answering an easier question, and its
+score stops being comparable to gold.
+
+**The lexical baselines are deliberately flattered.** Two variants are
+computed: Jaccard (`token_overlap`, the incumbent as written) and sentence-side
+coverage (`|s∩e| / |s|`, which doesn't punish long evidence). Neither gets a
+fixed cutoff — each is scored at the *oracle threshold*, the one maximising its
+own gold macro-F1, chosen after seeing the labels. That is the best case the
+incumbent could possibly have, and the pre-registered bar is measured against
+the stronger of the two. Beating a baseline tuned in its own favour is the
+conservative claim; beating one with a threshold picked in advance would not be.
+
+**macro-F1, not accuracy.** The candidate set is heavily supported-leaning, so
+accuracy would hand "always say supported" ~0.8 and flatter every judge equally.
+Macro-F1 puts that strategy below 0.5.
+
+Predictions are cached per pair and appended immediately, so an interrupted run
+resumes without re-paying for what it finished, and a rerun corrects in place
+rather than duplicating. Groq calls are paced under a client-side per-minute
+token budget — the free tier's cap is the real ceiling on this, not model speed.
+
+Unlike the candidates they refer to, prediction files **are committed**: they
+carry no scraped text, and timestamps earlier than the gold labels are the
+evidence that predictions were made without the answers in hand.
 
 ## What it measures
 
