@@ -31,6 +31,16 @@ dist/
 # are uploaded as a CI artifact instead of versioned.
 backend/evals/results/
 
+# Exception: citation-judge predictions. They hold pair ids, verdicts and
+# scores — no scraped text — and they are the audit trail for a pre-registered
+# claim: timestamps earlier than the gold labels are what shows the predictions
+# were not made with the answers in hand. Also expensive to regenerate, since
+# each one costs Groq calls against a per-minute token cap.
+!backend/evals/results/
+backend/evals/results/*
+!backend/evals/results/judge/
+!backend/evals/results/judge/*.jsonl
+
 # Captured citation-judge candidates. Held out deliberately: the records embed
 # full extracted page text from third-party sites, which is not ours to
 # redistribute. The curated, licence-checked dataset gets published separately;
