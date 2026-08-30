@@ -360,6 +360,15 @@ library the real hidden cost); full LLM-as-judge with a human-labelled golden
 set (do the cheap deterministic scorers first and see if they suffice);
 hand-maintained CHANGELOG (use auto-generated release notes from tags).
 
+> **Amended 2026-08-30.** The deterministic scorers were built and *do*
+> suffice, so the kill above stands for the eval harness: nothing here is
+> becoming an LLM-judged metric, and per-claim entailment stays out of the
+> request path. What is being built (`finetune/PREREGISTRATION.md`) is a
+> narrower thing wearing a similar name — one offline judge for citation
+> support, ~200 hand-labelled pairs, never imported by `backend/` and never
+> on the serving box. Its purpose is a portfolio proof with an honestly
+> measured number, not a metric this project runs on.
+
 **Relitigates a settled decision:** HyDE / query rewriting (adds an LLM round
 trip; decomposition already exists); verifier or critic agents, reflection
 loops, multi-hop agentic retrieval — all re-introduce the ~25s already measured
