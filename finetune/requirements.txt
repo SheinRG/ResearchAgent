@@ -1,0 +1,22 @@
+# Fine-tuning environment. Deliberately separate from backend/requirements.txt:
+# the serving box is a 512MB Render starter instance and none of this belongs
+# on it. The judge is eval-time only.
+#
+#     pip install -r requirements.txt
+#
+# Pinned loosely on purpose — this is meant to be re-run in a fresh Colab
+# months from now, and a hard pin to a CUDA-specific wheel ages worse than a
+# floor. Exact resolved versions land in the run's report, not here.
+
+# --- dataset build (CPU, runs anywhere) ---
+datasets>=2.19
+huggingface-hub>=0.23
+
+# --- training (needs a GPU) ---
+torch>=2.3
+transformers>=4.44
+peft>=0.12
+trl>=0.9
+accelerate>=0.33
+bitsandbytes>=0.43   # 4-bit QLoRA; Linux/CUDA only, hence not in the CPU set
+sentencepiece>=0.2

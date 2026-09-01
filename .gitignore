@@ -47,6 +47,21 @@ backend/evals/results/*
 # this is the raw working file.
 backend/evals/data/
 
+# ===== Fine-tune =====
+# The built training set. Large, and derived from CC BY-SA corpora, so
+# redistributing it here would quietly put the repo's MIT licence over
+# share-alike data — see finetune/LICENCES.md. It is rebuildable from
+# build_dataset.py, which is the point of committing the builder instead.
+finetune/data/
+
+# Exception: the build report. Row counts, per-source drop tallies and the
+# class balance — no dataset text. It is what lets a reader check the training
+# set's composition without downloading it, so it belongs in git for the same
+# reason the judge predictions do.
+!finetune/data/
+finetune/data/*
+!finetune/data/*.report.json
+
 # Scratch files from local smoke-testing (may contain auth tokens).
 tok.tmp
 *.tmp
