@@ -47,9 +47,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from evals.contamination import build_manifest
+
 EVALS_DIR = Path(__file__).parent
 DEFAULT_PAIRS = EVALS_DIR / "data" / "pairs.jsonl"
 DEFAULT_LABELS = EVALS_DIR / "gold.jsonl"
+# Lives under finetune/ because that is who reads it: the training-data build
+# needs to know what gold is without importing the backend.
+DEFAULT_MANIFEST = EVALS_DIR.parent.parent / "finetune" / "gold_manifest.json"
 
 SUPPORTED = "supported"
 UNSUPPORTED = "unsupported"
@@ -398,6 +403,11 @@ def main() -> int:
         "--agreement", action="store_true",
         help="Report self-agreement from existing recheck labels and stop.",
     )
+    parser.add_argument(
+        "--manifest", nargs="?", const=str(DEFAULT_MANIFEST), metavar="PATH",
+        help="Export the gold set's fingerprints (hashes only) for the "
+             "training-data contamination guard, and stop.",
+    )
     args = parser.parse_args()
 
     pairs_path = Path(args.pairs)
@@ -408,6 +418,23 @@ def main() -> int:
     except FileNotFoundError as e:
         print(e, file=sys.stderr)
         return 1
+
+    if args.manifest:
+        # Deliberately independent of how many pairs are *labelled*: the gold
+        # set is defined by the seeded order and the limit, so the guard can be
+        # exported (and the training data built) while labelling is still in
+        # progress. What must never drift is the --limit used here and there.
+        gold = pending(candidates, {}, seed=args.seed)[: args.limit or None]
+        manifest = build_manifest(gold, seed=args.seed, limit=args.limit or len(gold))
+        out = Path(args.manifest)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        print(
+            f"  Gold fingerprints for {manifest['n']} pair(s) "
+            f"across {len(manifest['query_ids'])} quer(ies) -> {out}\n"
+            f"  Hashes only; no sentences or evidence are written."
+        )
+        return 0
 
     first, recheck = load_labels(labels_path)
 

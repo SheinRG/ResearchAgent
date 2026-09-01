@@ -40,6 +40,31 @@ a quotable number. Its protocol (blind labeller, seeded shuffle, measured
 self-agreement, `unclear` excluded from scoring and reported separately) lives
 in `backend/evals/label.py` and is part of this pre-registration.
 
+### Contamination rule
+
+"Never trained on" is stricter than "no shared pair ids", and the difference
+is not academic. Capture emits many pairs per query and pairs from one query
+share retrieved evidence chunks, so a pair with a fresh id can still carry the
+gold set's evidence. Measured on the first capture: of the 111 candidates
+outside the gold-200, **97 reuse a gold evidence chunk, 81 reuse a gold
+sentence verbatim, and 0 are clean** — all 15 captured queries are touched by
+the gold set.
+
+A training pair is therefore disqualified if it shares **any** of: `pair_id`,
+`query_id`, normalised evidence text, or a near-duplicate sentence
+(content-word Jaccard ≥ 0.70) with gold. `query_id` is the binding one — same
+run means same retrieved corpus.
+
+Enforced by `backend/evals/contamination.py` against `finetune/gold_manifest.json`
+(hashes only, no evidence, no labels), which is regenerated with
+`python -m evals.label --manifest`. The training build calls `assert_clean`
+and **raises** rather than filtering: a silent drop would turn contamination
+into a quietly smaller dataset nobody audits.
+
+Consequence, recorded here rather than discovered later: the in-domain slice
+cannot be salvaged from the existing capture. It requires new capture runs on
+queries disjoint from the 15 already used.
+
 ## The baselines
 
 Four, all evaluated on the same gold set, all predictions produced *before*
