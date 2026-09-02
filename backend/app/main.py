@@ -82,7 +82,14 @@ async def lifespan(app: FastAPI):
         if healthy:
             logger.info("LLM client is healthy (model: %s)", llm.model)
         else:
-            logger.warning("LLM health check failed — check API key")
+            # Deliberately not "check API key": the likeliest cause is a
+            # GROQ_MODEL pointing at a model Groq has retired, and naming only
+            # the key sends you looking in the wrong place. health_check has
+            # already logged which of the two it is.
+            logger.error(
+                "LLM unhealthy (model: %s) — check GROQ_MODEL and GROQ_API_KEY",
+                llm.model,
+            )
     except Exception as e:
         logger.warning("LLM health check failed: %s", e)
 

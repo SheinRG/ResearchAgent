@@ -347,10 +347,23 @@ class GroqClient:
 
     async def health_check(self, ttl: int = 30) -> bool:
         """
-        Check if Groq API is reachable and responding.
+        Can this client actually serve a request right now?
 
-        Caches the result for ``ttl`` seconds so repeated health polls don't
-        burn Groq rate limit on the models endpoint.
+        Two conditions, not one: Groq must answer, **and** the model this
+        client is configured to call must be one Groq serves. Reporting only
+        reachability is what made the 2026-08-22 outage (`72f8650`) invisible
+        — Groq had decommissioned both Llama models, every layer degraded
+        politely, the demo answered nothing, and this method kept returning
+        True because the API itself was up. It logged the missing model on the
+        line above and then discarded that fact.
+
+        A missing model is an error, not a warning: nothing the app does will
+        work until it is changed. It does not take the service down, though —
+        ``/api/health`` gates its 503 on Postgres alone, so this surfaces as
+        ``llm: disconnected`` on an instance that still serves cached reads.
+
+        Caches for ``ttl`` seconds so repeated polls don't burn Groq rate
+        limit on the models endpoint.
         """
         now = time.monotonic()
         if self._health_cache is not None and (now - self._health_cache_at) < ttl:
@@ -360,13 +373,13 @@ class GroqClient:
             models = await self.client.models.list()
             available = any(m.id == self.model for m in models.data)
             if not available:
-                model_ids = [m.id for m in models.data]
-                logger.warning(
-                    "Model '%s' not found. Available: %s",
+                logger.error(
+                    "Model '%s' is not served by Groq — every call will 404. "
+                    "Available: %s",
                     self.model,
-                    model_ids,
+                    [m.id for m in models.data],
                 )
-            self._health_cache = True
+            self._health_cache = available
         except Exception as e:
             logger.error("Groq health check failed: %s", e)
             self._health_cache = False
