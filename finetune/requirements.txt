@@ -14,7 +14,7 @@ huggingface-hub>=0.23
 
 # --- training (needs a GPU) ---
 torch>=2.3
-transformers>=4.44
+transformers>=4.51   # Qwen3 architecture landed in 4.51
 peft>=0.12
 trl>=0.9
 accelerate>=0.33

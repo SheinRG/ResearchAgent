@@ -122,3 +122,35 @@ before any training compute is spent.
 3. QLoRA training + ablations (this directory gets its own requirements file;
    `backend/requirements.txt` stays untouched).
 4. Wire into eval harness + writeup.
+
+## Addendum, 2026-11-19: the zero-shot protocol
+
+Written before the zero-shot run and before any gold label exists. The
+baselines section above names zero-shot Qwen3-1.7B but never said *how* it is
+run, and each choice below moves its score, so the choices are fixed here
+rather than picked after seeing what they produce. Implemented in
+`finetune/01_zero_shot_baseline.ipynb`.
+
+- **Same prompt.** System and user prompt are imported from
+  `backend/evals/judge.py` (`_SYSTEM`, `build_prompt`), not copied. The
+  zero-shot model is asked exactly what gpt-oss-20b/120b were asked.
+- **Thinking off** (`enable_thinking=False`). The fine-tuned judge answers in
+  one token with no reasoning, so its baseline has to be measured in that
+  format. A reasoning baseline would make the +10 bar compare two different
+  tasks.
+- **4-bit NF4, the same quantisation the adapter runs on.** The difference
+  between baseline and fine-tune is then the adapter and nothing else. Loading
+  the baseline in bf16 would quietly credit (or blame) the adapter for the
+  quantisation.
+- **Score and verdict.** One forward pass. The probability of the first token
+  of each answer is summed over case and leading-space variants, giving
+  `score = P(supported) / (P(supported) + P(unsupported))`; the verdict is
+  whichever is larger. The probability mass on the two answers together is
+  recorded as a diagnostic: low mass means the model wanted to say something
+  else, and the verdict is then a forced choice.
+- **Scored on the verdict, like the prompted judges.** The oracle threshold
+  stays reserved for judges with no decision of their own (the lexical
+  variants). The fine-tuned judge is held to the same fixed rule, so the
+  comparison is symmetric. The oracle-threshold figure for zero-shot is
+  computable from the committed scores and is reported next to the headline
+  as a sensitivity check, never as the bar.
