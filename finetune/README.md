@@ -38,6 +38,14 @@ The build writes `data/public.jsonl` (gitignored — CC BY-SA, see
 [`LICENCES.md`](LICENCES.md)) and `data/public.report.json` (committed: row
 counts, per-source drops, class balance).
 
+### Zero-shot baseline
+
+The untrained Qwen3-1.7B is the fourth baseline, and it needs a GPU, so it runs in Colab rather than here. It must run before any gold label exists; the prediction timestamps are the audit trail. The protocol is fixed in the zero-shot addendum in [`PREREGISTRATION.md`](PREREGISTRATION.md).
+
+1. Open `01_zero_shot_baseline.ipynb` in Colab on a T4 runtime.
+2. Upload your local `backend/evals/data/pairs.jsonl` when asked, then run all.
+3. It downloads the predictions (`qwen-qwen3-1.7b-zero-shot.jsonl`) and a run report (`qwen3-1.7b-zero-shot.json`). Put the first in `backend/evals/results/judge/` and the second in `finetune/reports/`, and commit both before labelling.
+
 ## The contamination rule
 
 `assert_clean` **raises** rather than filtering. A training pair is
@@ -54,8 +62,10 @@ queries disjoint from the 15 already used.
 ## Status
 
 - [x] Milestone 0 — Tier 1 safety items
-- [ ] Milestone 1 — measurement spine. Tooling and all four baselines done at
-      200/200. **Blocked on ~200 hand labels**, which cannot be delegated to a
+- [ ] Milestone 1 — measurement spine. Tooling and the lexical and both prompted
+      baselines done at 200/200; the zero-shot Qwen3-1.7B baseline has a notebook
+      (`01_zero_shot_baseline.ipynb`) awaiting its Colab run, which must happen
+      before labelling. **Blocked on ~200 hand labels**, which cannot be delegated to a
       model without changing what the gold set means. Ends at the gate in
       `PREREGISTRATION.md`.
 - [ ] Milestone 2 — training data. Public slice built; in-domain slice waits on
